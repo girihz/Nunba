@@ -109,9 +109,25 @@ export function SocialProvider({children}) {
                 }
               })
               .catch(() => {
-                // Recovery failed — still keep guest_mode so the UI
-                // stays in guest state rather than logging out entirely
-                setCurrentUser({ id: guestId, username: guestName || 'User', role: 'guest' });
+                // Recovery failed (key rotated after reinstall) — re-register as guest
+                authApi.guestRegister({ guest_name: guestName || 'User', device_id: guestId })
+                  .then((res) => {
+                    if (res?.data?.token) {
+                      localStorage.setItem('access_token', res.data.token);
+                      localStorage.setItem('social_user_id', res.data.user?.id || guestId);
+                      setCurrentUser({
+                        id: res.data.user?.id || guestId,
+                        username: guestName || 'User',
+                        role: 'guest',
+                      });
+                      fetchProfile();
+                    } else {
+                      setCurrentUser({ id: guestId, username: guestName || 'User', role: 'guest' });
+                    }
+                  })
+                  .catch(() => {
+                    setCurrentUser({ id: guestId, username: guestName || 'User', role: 'guest' });
+                  });
               })
               .finally(() => setLoading(false));
             return;

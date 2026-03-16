@@ -235,6 +235,14 @@ begin
 
     if CurUninstallStep = usPostUninstall then
     begin
+        // Clean up install directory remnants (python-embed, __pycache__, etc.)
+        // Inno Setup only removes files it installed — build artifacts need manual cleanup
+        DelTree(ExpandConstant('{app}\python-embed'), True, True, True);
+        DelTree(ExpandConstant('{app}\__pycache__'), True, True, True);
+        DelTree(ExpandConstant('{app}\lib'), True, True, True);
+        // Remove the install dir itself if empty
+        RemoveDir(ExpandConstant('{app}'));
+
         // Clean up user Documents directory
         DelTree(ExpandConstant('{userdocs}\Nunba'), True, True, True);
 

@@ -899,25 +899,21 @@ class LlamaInstaller:
         if not preset.mmproj_file:
             return None
 
-        # Try model-specific naming variant FIRST (e.g. mmproj-Qwen3.5-4B-F16.gguf)
-        # This avoids loading a generic mmproj-F16.gguf that doesn't match the model.
-        # Extract model family from file_name:
-        #   "Qwen3-VL-2B-Instruct-UD-Q4_K_XL.gguf" → "Qwen3-VL-2B"
-        #   "Qwen3.5-4B-UD-Q4_K_XL.gguf" → "Qwen3.5-4B"
-        base = preset.file_name.split("-Instruct")[0].split("-Thinking")[0].split("-UD-")[0]
-        # Remove .gguf extension if still present after splitting
-        base = base.replace('.gguf', '')
-        variant_name = preset.mmproj_file.replace("mmproj-", f"mmproj-{base}-")
-        result = self._find_file_in_dirs(variant_name)
-        if result:
-            logger.info(f"Found model-specific mmproj variant: {variant_name}")
-            return result
-
-        # Fall back to exact generic filename (e.g. mmproj-F16.gguf)
+        # Search for preset.mmproj_file directly (already model-specific, e.g. mmproj-Qwen3.5-4B-F16.gguf)
         result = self._find_file_in_dirs(preset.mmproj_file)
         if result:
-            logger.warning(f"Using generic mmproj {preset.mmproj_file} — model-specific {variant_name} not found")
             return result
+
+        # If preset uses a generic name (mmproj-F16.gguf), try model-specific variant
+        if preset.mmproj_file == (preset.mmproj_source_file or preset.mmproj_file):
+            base = preset.file_name.split("-Instruct")[0].split("-Thinking")[0].split("-UD-")[0]
+            base = base.replace('.gguf', '')
+            variant_name = preset.mmproj_file.replace("mmproj-", f"mmproj-{base}-")
+            if variant_name != preset.mmproj_file:
+                result = self._find_file_in_dirs(variant_name)
+                if result:
+                    logger.info(f"Found model-specific mmproj variant: {variant_name}")
+                    return result
 
         return None
 

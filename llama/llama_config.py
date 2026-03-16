@@ -132,6 +132,7 @@ class LlamaConfig:
 
         self.installer = LlamaInstaller()
         self.server_process: Optional[subprocess.Popen] = None
+        self._server_starting = False  # Lock to prevent double start
 
         # Load or create config
         self.config = self._load_config()
@@ -886,6 +887,27 @@ class LlamaConfig:
         Returns:
             True if server started successfully, False otherwise
         """
+        # Prevent double start — if another thread is already starting the server, wait
+        if self._server_starting:
+            logger.info("Server start already in progress — waiting...")
+            for _ in range(120):  # wait up to 60s
+                time.sleep(0.5)
+                if not self._server_starting:
+                    break
+            if self.is_llm_available():
+                logger.info("Server started by another thread — reusing")
+                return True
+            logger.warning("Server start by another thread timed out")
+            return False
+
+        self._server_starting = True
+        try:
+            return self._do_start_server(model_preset, force_new_port)
+        finally:
+            self._server_starting = False
+
+    def _do_start_server(self, model_preset=None, force_new_port=False):
+        """Internal server start — called by start_server() with lock protection."""
         # Get desired port
         desired_port = self.config.get("server_port", 8080)
 
