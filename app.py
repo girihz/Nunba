@@ -487,7 +487,9 @@ if '--validate' not in sys.argv and '--install-ai' not in sys.argv and '--backgr
                     pass
 
             _es_animate()
-            _eroot.update_idletasks()
+            _eroot.update()  # must be update() not update_idletasks() — processes DPI events
+            # Self-destruct: if splash is still alive after 5 min, something hung — kill it
+            _eroot.after(300000, lambda: _eroot.destroy())
             # Store: (hidden_root, toplevel, canvas, status_var, photo_ref)
             _early_splash = (_eroot, _es_top, _es_canvas, _es_status, _es_photo)
         else:
@@ -507,7 +509,8 @@ import ctypes
 from pathlib import Path
 import shutil
 import atexit
-import pyperclip
+# pyperclip lazy-imported in clipboard monitor thread — clipboard API can deadlock
+# if another app holds the clipboard lock during startup
 # waitress is lazy-imported in start_flask() — no top-level import needed
 import urllib.parse
 import requests
@@ -578,17 +581,23 @@ except Exception as _llama_import_err:
     _setup_logger = logging.getLogger('NunbaSetup')
     _setup_logger.warning(f"Llama import failed: {type(_llama_import_err).__name__}: {_llama_import_err}")
 
-try:
-    # macOS requires all NSWindow/Tk() creation on the main thread, but pywebview
-    # owns the main thread — so the Tk-based indicator cannot run on macOS.
-    if sys.platform == 'darwin':
-        raise ImportError("Tk indicator not supported on macOS (NSWindow must be on main thread)")
-    indicator_module = importlib.import_module('desktop.indicator_window')
-    INDICATOR_AVAILABLE = True
-    print("LLM control indicator module loaded successfully")
-except ImportError:
-    INDICATOR_AVAILABLE = False
-    print("LLM control indicator module not available")
+# desktop.indicator_window is lazy-loaded — importing it at module level
+# deadlocks with the early splash's Tk instance. Load on first use instead.
+indicator_module = None
+INDICATOR_AVAILABLE = False
+
+def _load_indicator():
+    """Lazy-load the indicator module after Tk splash is destroyed."""
+    global indicator_module, INDICATOR_AVAILABLE
+    if indicator_module is not None:
+        return
+    try:
+        if sys.platform == 'darwin':
+            return  # macOS: NSWindow must be on main thread
+        indicator_module = importlib.import_module('desktop.indicator_window')
+        INDICATOR_AVAILABLE = True
+    except ImportError:
+        INDICATOR_AVAILABLE = False
 
 # Global variable to track system tray status
 _tray_icon = None
@@ -657,6 +666,7 @@ def _clipboard_monitor_thread():
     global _last_clipboard
     while True:
         try:
+            import pyperclip
             current = pyperclip.paste()
             if current != _last_clipboard:
                 _last_clipboard = current

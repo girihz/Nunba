@@ -1060,19 +1060,121 @@ def sign_macos():
     return True
 
 
-def build_linux(python_exe, app_only=False):
-    """Build on Linux (AppImage)"""
-    print_header("Building Nunba for Linux")
+def build_linux(python_exe, app_only=False, installer_only=False):
+    """Build on Linux (cx_Freeze + AppImage)
 
-    # For now, just build with cx_Freeze
-    # TODO: Add AppImage support
-    if not run_command([python_exe, os.path.join('scripts', 'setup_freeze_mac.py'), 'build'],
-                       "Running cx_Freeze..."):
+    Flow mirrors Windows: deps -> React build -> cx_Freeze -> package (AppImage).
+    Uses setup_freeze_linux.py for the cx_Freeze step and build_appimage.sh for
+    packaging into a self-contained AppImage.
+    """
+    if installer_only:
+        # Skip cx_Freeze, jump straight to AppImage packaging
+        return _build_linux_appimage(python_exe)
+
+    # Clean previous build before rebuilding
+    build_dir = os.path.join('build', 'Nunba')
+    if os.path.exists(build_dir):
+        print_info("Cleaning previous build (preserving python-embed if unchanged)...")
+        for item in os.listdir(build_dir):
+            if item in ['python-embed', 'python-embed.hash']:
+                continue
+            item_path = os.path.join(build_dir, item)
+            try:
+                if os.path.isdir(item_path):
+                    shutil.rmtree(item_path, ignore_errors=True)
+                else:
+                    os.remove(item_path)
+            except Exception as e:
+                print_warn(f"Failed to remove {item_path}: {e}")
+
+    print_header("Building Nunba executable with cx_Freeze (Linux)")
+
+    # Run cx_Freeze with the Linux-specific freeze script
+    if not run_command([python_exe, os.path.join('scripts', 'setup_freeze_linux.py'), 'build'],
+                       "Running cx_Freeze (Linux)..."):
         print_error("cx_Freeze build failed!")
         return False
 
-    print_info("Linux build complete (AppImage support coming soon)")
-    return True
+    # Verify executable was created
+    exe_path = os.path.join('build', 'Nunba', 'Nunba')
+    if not os.path.exists(exe_path):
+        print_error(f"Nunba executable was not created at {exe_path}")
+        return False
+
+    # Ensure executable permission
+    os.chmod(exe_path, 0o755)
+    print_info(f"Build successful: {exe_path}")
+
+    # Strip HevolveAI source from python-embed (proprietary -- .pyc only)
+    _compile_script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    '..', '..', 'HARTOS', 'scripts', 'compile_hevolveai.py')
+    if os.path.isfile(_compile_script):
+        _hv_sp = os.path.join('build', 'Nunba', 'python-embed', 'Lib', 'site-packages')
+        # Also check Linux-style path
+        if not os.path.isdir(_hv_sp):
+            import sysconfig
+            _pyver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+            _hv_sp = os.path.join('build', 'Nunba', 'python-embed', 'lib', _pyver, 'site-packages')
+        _hv_dir = os.path.join(_hv_sp, 'hevolveai')
+        if os.path.isdir(_hv_dir):
+            print_info("Stripping HevolveAI source (proprietary)...")
+            run_command([python_exe, _compile_script, '--strip-source',
+                        '--output-dir', _hv_dir],
+                       "Compiling HevolveAI .py -> .pyc...")
+        else:
+            print_info("HevolveAI not in python-embed -- skipping source strip")
+    else:
+        print_info("HARTOS compile script not found -- HevolveAI source strip skipped")
+
+    # Slim python-embed
+    slim_python_embed()
+
+    if app_only:
+        return True
+
+    return _build_linux_appimage(python_exe)
+
+
+def _build_linux_appimage(python_exe):
+    """Package the cx_Freeze output into an AppImage.
+
+    Calls build_appimage.sh which:
+    1. Creates AppDir structure (usr/bin, usr/share/applications, icons)
+    2. Copies cx_Freeze output into AppDir
+    3. Generates AppRun launcher with LD_LIBRARY_PATH setup
+    4. Runs appimagetool to produce a self-contained .AppImage
+    """
+    # Verify the cx_Freeze output exists
+    exe_path = os.path.join('build', 'Nunba', 'Nunba')
+    if not os.path.exists(exe_path):
+        print_error(f"Nunba executable not found at {exe_path}. Run 'python build.py app' first.")
+        return False
+
+    print_header("Creating AppImage")
+
+    appimage_script = os.path.join('scripts', 'build_appimage.sh')
+    if not os.path.exists(appimage_script):
+        print_error(f"AppImage build script not found: {appimage_script}")
+        return False
+
+    # Make the script executable
+    os.chmod(appimage_script, 0o755)
+
+    if not run_command(['bash', appimage_script, '--skip-freeze'],
+                       "Packaging AppImage..."):
+        print_error("AppImage packaging failed!")
+        return False
+
+    # Check if AppImage was created
+    import glob as _glob
+    appimages = _glob.glob(os.path.join('Output', 'Nunba-*.AppImage'))
+    if appimages:
+        latest = max(appimages, key=os.path.getmtime)
+        print_info(f"AppImage created: {latest}")
+        return True
+
+    print_error("AppImage was not created in Output/")
+    return False
 
 
 def print_summary():
@@ -1117,6 +1219,28 @@ def print_summary():
         print("=" * 60)
         print(f"\n  To test:    open build/Nunba.app")
         print(f"  To install: open Output/Nunba_Setup.dmg")
+
+    elif IS_LINUX:
+        exe_path = os.path.join('build', 'Nunba', 'Nunba')
+
+        if os.path.exists(exe_path):
+            size = os.path.getsize(exe_path) // (1024 * 1024)
+            print(f"  Executable: {exe_path}")
+            print(f"  Size: ~{size} MB")
+
+        # Find the AppImage
+        import glob as _glob
+        appimages = _glob.glob(os.path.join('Output', 'Nunba-*.AppImage'))
+        if appimages:
+            latest = max(appimages, key=os.path.getmtime)
+            size = os.path.getsize(latest) // (1024 * 1024)
+            print(f"  AppImage:   {latest} ({size} MB)")
+
+        print("=" * 60)
+        print(f"\n  To test:    ./build/Nunba/Nunba")
+        if appimages:
+            print(f"  To install: ./deploy/linux/install.sh")
+        print(f"\n  Requirements: GTK 3.0, WebKit2GTK 4.0")
 
 
 def main():
@@ -1204,7 +1328,10 @@ def main():
             return 1
         success = build_macos(python_exe, app_only, installer_only)
     elif target == 'linux':
-        success = build_linux(python_exe, app_only)
+        if not IS_LINUX:
+            print_error("Linux builds must be done on Linux")
+            return 1
+        success = build_linux(python_exe, app_only, installer_only)
 
     if success:
         print_summary()
