@@ -185,6 +185,22 @@ class LlamaConfig:
         except Exception as e:
             logger.error(f"Failed to save config: {e}")
 
+    @staticmethod
+    def _propagate_llm_url(url: str):
+        """Set the canonical LLM URL env var and invalidate caches.
+
+        Called after start_server() detects or starts a server.
+        Uses set_local_llm_url() from port_registry which validates
+        the URL, sets HEVOLVE_LOCAL_LLM_URL, and clears the resolver cache.
+        """
+        try:
+            from core.port_registry import set_local_llm_url
+            set_local_llm_url(url)
+        except ImportError:
+            # Fallback if HARTOS not available (standalone Nunba dev)
+            os.environ['HEVOLVE_LOCAL_LLM_URL'] = url
+            logger.info(f"LLM URL set: {url}")
+
     def is_first_run(self) -> bool:
         """Check if this is the first run"""
         return self.config.get("first_run", True)
@@ -963,8 +979,7 @@ class LlamaConfig:
             if server_type == ServerType.NUNBA_MANAGED:
                 logger.info(f"Nunba-managed server already running on port {_port}")
                 self.api_base = f"http://127.0.0.1:{_port}/v1"
-                os.environ['LLAMA_CPP_PORT'] = str(_port)
-                os.environ['CUSTOM_LLM_BASE_URL'] = self.api_base
+                self._propagate_llm_url(self.api_base)
                 return True
 
             if server_type == ServerType.EXTERNAL_LLAMA:
@@ -972,8 +987,7 @@ class LlamaConfig:
                 logger.info("Using existing llama.cpp server instead of starting new one")
                 self.api_base = f"http://127.0.0.1:{_port}/v1"
                 self.config["server_port"] = _port
-                os.environ['LLAMA_CPP_PORT'] = str(_port)
-                os.environ['CUSTOM_LLM_BASE_URL'] = self.api_base
+                self._propagate_llm_url(self.api_base)
                 self._save_config()
                 return True
 
@@ -1214,11 +1228,9 @@ class LlamaConfig:
                     elapsed = time.time() - start_time
                     logger.info(f"Server started successfully on port {desired_port} (took {elapsed:.1f}s)")
                     self._write_server_status(True, self.server_process.pid, model_preset.display_name)
-                    # Propagate port to env so HARTOS (hart_intelligence_entry)
-                    # picks it up via LLAMA_CPP_PORT / CUSTOM_LLM_BASE_URL
-                    os.environ['LLAMA_CPP_PORT'] = str(desired_port)
-                    os.environ['CUSTOM_LLM_BASE_URL'] = f'http://127.0.0.1:{desired_port}/v1'
-                    logger.info(f"Set LLAMA_CPP_PORT={desired_port}, CUSTOM_LLM_BASE_URL=http://127.0.0.1:{desired_port}/v1")
+                    # Propagate LLM URL to env so HARTOS resolves the correct endpoint
+                    self.api_base = f'http://127.0.0.1:{desired_port}/v1'
+                    self._propagate_llm_url(self.api_base)
                     # Register VRAM allocation with VRAMManager (shared with TTS, vision)
                     if can_use_gpu:
                         vm = self._get_vram_manager()

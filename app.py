@@ -416,18 +416,14 @@ def _load_deferred_config():
             with open(_llm_cfg_path, 'r') as _f:
                 _llm_cfg = _json_llm.load(_f)
 
+            # Set HEVOLVE_LOCAL_LLM_URL from config — single source of truth
+            # for all LLM URL resolution. server_port is authoritative over
+            # any stale external_llm_endpoint URL.
+            _cfg_port = str(_llm_cfg.get('server_port', 8080))
+            os.environ.setdefault('HEVOLVE_LOCAL_LLM_URL', f'http://127.0.0.1:{_cfg_port}/v1')
             if _llm_cfg.get('use_external_llm') and _llm_cfg.get('external_llm_endpoint'):
-                _ext = _llm_cfg['external_llm_endpoint']
-                # Prefer server_port from config (authoritative) over parsed URL port
-                # to avoid stale external_llm_endpoint URLs after port changes
-                _cfg_port = str(_llm_cfg.get('server_port', 8080))
-                os.environ.setdefault('LLAMA_CPP_PORT', _cfg_port)
-                os.environ.setdefault('HEVOLVE_LOCAL_LLM_URL', f'http://127.0.0.1:{_cfg_port}/v1')
                 _llm_configured = True
             else:
-                _port = str(_llm_cfg.get('server_port', 8080))
-                os.environ.setdefault('LLAMA_CPP_PORT', _port)
-                os.environ.setdefault('HEVOLVE_LOCAL_LLM_URL', f'http://127.0.0.1:{_port}/v1')
                 _llm_configured = not _llm_cfg.get('first_run', True)
     except Exception:
         pass
@@ -2122,10 +2118,9 @@ if getattr(args, 'setup_ai', False):
             config.config["use_external_llm"] = True
             config.mark_first_run_complete()
             config._save_config()
-            # Propagate to env so HARTOS picks it up (same as local llama.cpp path)
-            os.environ['CUSTOM_LLM_BASE_URL'] = base_url
-            if '/v1' not in base_url:
-                os.environ['CUSTOM_LLM_BASE_URL'] = base_url + '/v1'
+            # Propagate to env so HARTOS picks it up via unified resolver
+            _wizard_url = base_url if '/v1' in base_url else base_url + '/v1'
+            os.environ['HEVOLVE_LOCAL_LLM_URL'] = _wizard_url
             _setup_logger.info(f"--setup-ai: custom_api configured, base_url={base_url}, reachable={api_working}")
 
         else:  # skip or window closed
@@ -6128,8 +6123,8 @@ if __name__ == "__main__":
                         if _ext_url:
                             if '/v1' not in _ext_url:
                                 _ext_url = _ext_url.rstrip('/') + '/v1'
-                            os.environ['CUSTOM_LLM_BASE_URL'] = _ext_url
-                            logger.info(f"External LLM endpoint propagated: CUSTOM_LLM_BASE_URL={_ext_url}")
+                            os.environ['HEVOLVE_LOCAL_LLM_URL'] = _ext_url
+                            logger.info(f"External LLM endpoint propagated: HEVOLVE_LOCAL_LLM_URL={_ext_url}")
                     elif llama_config.is_cloud_configured():
                         try:
                             from desktop.ai_key_vault import AIKeyVault
