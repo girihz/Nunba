@@ -5,7 +5,7 @@
 <h1 align="center">Nunba</h1>
 <p align="center"><strong>A Friend, A Well Wisher, Your LocalMind</strong></p>
 <p align="center">
-  Desktop AI companion powered by <a href="https://github.com/hertz-ai/HARTOS">HARTOS</a> (Hive Agent Runtime OS).<br>
+  Desktop AI companion powered by <a href="https://github.com/hertz-ai/HARTOS">HARTOS</a> (Hevolve Hive Agent Runtime OS).<br>
   Runs local LLMs, TTS, STT, and vision models on your hardware. Privacy first.
 </p>
 
