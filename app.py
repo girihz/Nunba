@@ -335,6 +335,30 @@ if getattr(sys, 'frozen', False):
         sys.modules['torch.nn.functional'] = _torch_stub.nn.functional
         del _types, _torch_stub, _bad_torch, _TensorStub, _NoGradStub
 
+    # ── Fix transformers.__init__ frozenset crash in frozen builds ──
+    # transformers 5.x uses `import_structure[frozenset({})]` at line 772.
+    # In cx_Freeze frozen builds, the dict keys resolve differently and the
+    # frozenset({}) key is missing → KeyError at import time.
+    # Fix: patch the transformers/__init__.py file in site-packages to use
+    # .setdefault() instead of direct key access. This survives cx_Freeze tracing.
+    try:
+        import importlib.util as _ilu_tf
+        _tf_spec = _ilu_tf.find_spec('transformers')
+        if _tf_spec and _tf_spec.origin:
+            _tf_init = _tf_spec.origin
+            with open(_tf_init, 'r', encoding='utf-8') as _f:
+                _tf_src = _f.read()
+            _bad_line = 'import_structure[frozenset({})].update(_import_structure)'
+            if _bad_line in _tf_src:
+                _fixed = _tf_src.replace(
+                    _bad_line,
+                    'import_structure.setdefault(frozenset({}), {}).update(_import_structure)'
+                )
+                with open(_tf_init, 'w', encoding='utf-8') as _f:
+                    _f.write(_fixed)
+    except Exception:
+        pass
+
 # ── Deferred startup config ──
 # LLM config, AI key vault, and hardware tier detection are DEFERRED until after
 # the splash screen is visible. These involve disk I/O (config reads), crypto
@@ -5185,16 +5209,24 @@ def main():
                     _bg_first_show[0] = False
 
                     def _bg_reload_with_check():
-                        # Check if page already loaded correctly — don't reload if React is live
+                        # WebView2 suspends rendering when window is hidden.
+                        # Even if React mounted while hidden, the canvas is blank.
+                        # ALWAYS force a resize repaint on first show. Only reload
+                        # if the page URL is wrong (about:blank, error).
                         try:
                             _cur_url = _window.get_current_url() or ''
                             if _cur_url and 'localhost' in _cur_url and 'error' not in _cur_url.lower():
-                                # Page looks good — check if React actually mounted
-                                _state = _window.evaluate_js(
-                                    "document.getElementById('root')?.children?.length || 0")
-                                if _state and int(_state) > 0:
-                                    logger.info(f"[BACKGROUND] Page already loaded (root children={_state}) — skipping reload")
-                                    return
+                                # Page URL is correct — just force repaint, no reload needed
+                                logger.info(f"[BACKGROUND] Page loaded while hidden — forcing repaint")
+                                try:
+                                    w, h = _window.width, _window.height
+                                    _window.resize(w + 1, h)
+                                    time.sleep(0.15)
+                                    _window.resize(w, h)
+                                    logger.info("[BACKGROUND] Forced resize repaint on first show")
+                                except Exception:
+                                    pass
+                                return
                         except Exception:
                             pass
 

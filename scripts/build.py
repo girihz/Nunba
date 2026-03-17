@@ -311,7 +311,7 @@ def _fix_crossbarhttp(python_exe):
         content = content.replace(old, new)
         with open(init_py, 'w') as f:
             f.write(content)
-        print_info("Fixed crossbarhttp circular import (absolute → relative)")
+        print_info("Fixed crossbarhttp circular import (absolute to relative)")
 
 
 def _stamp_version_in_file(filepath, pattern, replacement):
@@ -744,6 +744,21 @@ def build_windows(python_exe, app_only=False, installer_only=False):
             except Exception as e:
                 print_warn(f"Failed to remove {item_path}: {e}")
 
+    # Auto-create python-embed if missing (GPU TTS/STT/VLM need it)
+    embed_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'python-embed')
+    if not os.path.isdir(embed_src) or not os.listdir(embed_src):
+        print_header("Creating python-embed (first time — downloads ~2GB)")
+        rebuild_script = os.path.join('scripts', 'rebuild_python_embed.py')
+        if os.path.isfile(rebuild_script):
+            if not run_command([python_exe, rebuild_script],
+                               "Building python-embed from scratch..."):
+                print_warn("python-embed creation failed — TTS/STT/VLM features will be unavailable")
+                print_warn("You can run 'python scripts/rebuild_python_embed.py' manually later")
+        else:
+            print_warn("rebuild_python_embed.py not found — skipping python-embed")
+    else:
+        print_info(f"python-embed exists ({embed_src})")
+
     print_header("Building Nunba executable with cx_Freeze")
 
     # Run cx_Freeze
@@ -770,7 +785,7 @@ def build_windows(python_exe, app_only=False, installer_only=False):
             print_info("Stripping HevolveAI source (proprietary)...")
             run_command([python_exe, _compile_script, '--strip-source',
                         '--output-dir', _hv_dir],
-                       "Compiling HevolveAI .py → .pyc...")
+                       "Compiling HevolveAI .py to .pyc...")
         else:
             print_info("HevolveAI not in python-embed — skipping source strip")
     else:

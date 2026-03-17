@@ -9,6 +9,25 @@ import os
 import glob
 import shutil
 import compileall
+
+# ── Fix transformers frozenset crash before cx_Freeze traces it ──
+# transformers/__init__.py line 772: import_structure[frozenset({})].update(...)
+# fails in cx_Freeze frozen builds. Patch the source file to use .setdefault().
+try:
+    import importlib.util as _ilu_patch
+    _tf_spec = _ilu_patch.find_spec('transformers')
+    if _tf_spec and _tf_spec.origin:
+        with open(_tf_spec.origin, 'r', encoding='utf-8') as _f:
+            _src = _f.read()
+        _bad = 'import_structure[frozenset({})].update(_import_structure)'
+        if _bad in _src:
+            _src = _src.replace(_bad,
+                'import_structure.setdefault(frozenset({}), {}).update(_import_structure)')
+            with open(_tf_spec.origin, 'w', encoding='utf-8') as _f:
+                _f.write(_src)
+            print(f"Patched transformers/__init__.py: frozenset fix applied")
+except Exception as _e:
+    print(f"WARNING: Could not patch transformers: {_e}")
 import py_compile
 
 # hevolveai/embodied_ai pull in torch/transformers which cause cx_Freeze

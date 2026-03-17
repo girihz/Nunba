@@ -860,21 +860,37 @@ class LlamaConfig:
         return server_type in [ServerType.NUNBA_MANAGED, ServerType.EXTERNAL_LLAMA]
 
     def _write_server_status(self, running: bool, pid: Optional[int] = None,
-                             model: Optional[str] = None):
-        """Write server status to file for cross-process coordination"""
+                             model: Optional[str] = None, port: Optional[int] = None):
+        """Write server status to SHARED file for cross-app coordination.
+
+        Written to both:
+          - ~/.nunba/server_status.json (Nunba-local)
+          - ~/.trueflow/server_status.json (TrueFlow reads this)
+        Format matches TrueFlow's ServerStatus data class so both apps
+        can discover each other's servers.
+        """
+        actual_port = port or self.config.get("server_port", 8080)
         status = {
             "running": running,
             "pid": pid,
-            "port": self.config.get("server_port", 8080),
+            "port": actual_port,
             "model": model,
             "started_by": "Nunba",
-            "started_at": time.strftime("%Y-%m-%d %H:%M:%S")
+            "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "projectPath": None,
+            "projectName": "Nunba"
         }
-        try:
-            with open(self.server_status_file, 'w') as f:
-                json.dump(status, f, indent=2)
-        except Exception as e:
-            logger.error(f"Failed to write server status: {e}")
+        # Write to all known status file locations
+        for status_path in [
+            self.server_status_file,  # ~/.nunba/server_status.json
+            Path.home() / ".trueflow" / "server_status.json",
+        ]:
+            try:
+                status_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(status_path, 'w') as f:
+                    json.dump(status, f, indent=2)
+            except Exception as e:
+                logger.debug(f"Failed to write status to {status_path}: {e}")
 
     def start_server(self, model_preset: Optional[ModelPreset] = None, force_new_port: bool = False) -> bool:
         """
@@ -887,24 +903,47 @@ class LlamaConfig:
         Returns:
             True if server started successfully, False otherwise
         """
-        # Prevent double start — if another thread is already starting the server, wait
-        if self._server_starting:
-            logger.info("Server start already in progress — waiting...")
-            for _ in range(120):  # wait up to 60s
-                time.sleep(0.5)
-                if not self._server_starting:
-                    break
-            if self.is_llm_available():
-                logger.info("Server started by another thread — reusing")
-                return True
-            logger.warning("Server start by another thread timed out")
-            return False
+        # Prevent double start across processes/threads using a file lock.
+        # Each code path (--setup-ai, app.py warm-up, /chat fallback) creates
+        # its own LlamaConfig instance, so in-memory flags don't work.
+        lock_file = self.config_dir / ".server_starting.lock"
 
-        self._server_starting = True
+        # Check if another process is already starting
+        if lock_file.exists():
+            try:
+                lock_age = time.time() - lock_file.stat().st_mtime
+                if lock_age < 120:  # lock is fresh (< 2 min)
+                    logger.info(f"Server start already in progress (lock age: {lock_age:.0f}s) — waiting...")
+                    for _ in range(120):
+                        time.sleep(0.5)
+                        if not lock_file.exists():
+                            break
+                        if self.is_llm_available():
+                            logger.info("Server started by another process — reusing")
+                            return True
+                    if self.is_llm_available():
+                        return True
+                    logger.warning("Server start by another process timed out")
+                    return False
+                else:
+                    logger.warning(f"Stale server lock ({lock_age:.0f}s old) — removing")
+                    lock_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        # Acquire lock
+        try:
+            lock_file.write_text(str(os.getpid()))
+        except Exception:
+            pass
+
         try:
             return self._do_start_server(model_preset, force_new_port)
         finally:
-            self._server_starting = False
+            try:
+                lock_file.unlink(missing_ok=True)
+            except Exception:
+                pass
 
     def _do_start_server(self, model_preset=None, force_new_port=False):
         """Internal server start — called by start_server() with lock protection."""
