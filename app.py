@@ -5801,36 +5801,29 @@ def _show_splash():
         import math
 
         logger.info("[SPLASH] Creating Tk root window...")
-        # Use a Toplevel on the hidden _eroot (same pattern as the early splash).
-        # NEVER deiconify _eroot — its default white bg causes a flash on Windows
-        # that persists until destroy(). A Toplevel inherits no bg from root and
-        # can be configured dark before it's mapped.
         if _eroot is not None:
-            root = _eroot  # keep reference for event loop (update/after)
-            splash_win = tk.Toplevel(_eroot)
+            root = _eroot
+            root.deiconify()
         else:
             root = tk.Tk()
-            root.withdraw()
-            splash_win = tk.Toplevel(root)
-
-        splash_win.configure(bg='#0A0914')
-        splash_win.overrideredirect(True)
-        splash_win.attributes('-topmost', True)
+        root.overrideredirect(True)  # No title bar / border
+        root.attributes('-topmost', True)
 
         # Splash dimensions
         W, H = 900, 560
-        sw = splash_win.winfo_screenwidth()
-        sh = splash_win.winfo_screenheight()
+        sw = root.winfo_screenwidth()
+        sh = root.winfo_screenheight()
         x = (sw - W) // 2
         y = (sh - H) // 2
-        splash_win.geometry(f"{W}x{H}+{x}+{y}")
+        root.geometry(f"{W}x{H}+{x}+{y}")
+        root.configure(bg='#0A0914')
 
-        canvas = tk.Canvas(splash_win, width=W, height=H, bg='#0A0914',
+        canvas = tk.Canvas(root, width=W, height=H, bg='#0A0914',
                            highlightthickness=0, bd=0)
         canvas.pack(fill='both', expand=True)
         logger.info(f"[SPLASH] Window created: {W}x{H} at ({x},{y})")
 
-        # ── Background: PIL-rendered base (anti-aliased) ──
+        # â”€â”€ Background: PIL-rendered base (anti-aliased) â”€â”€
         try:
             from PIL import Image, ImageDraw, ImageTk
             _bg = Image.new('RGBA', (W, H), (10, 9, 20, 255))
@@ -5860,9 +5853,9 @@ def _show_splash():
                     canvas.create_oval(dx - 1.5, dy - 1.5, dx + 1.5, dy + 1.5,
                                        fill='#1A1730', outline='')
 
-        # ── All text/graphics are now rendered by splash_effects animation engine ──
+        # â”€â”€ All text/graphics are now rendered by splash_effects animation engine â”€â”€
 
-        # ── Status text — drawn on canvas (NOT Label widget) so it blends ──
+        # â”€â”€ Status text â€” drawn on canvas (NOT Label widget) so it blends â”€â”€
         status_var = tk.StringVar(value='Starting up...')
         _status_text_id = canvas.create_text(
             W // 2, H - 32, text='Starting up...',
@@ -5876,7 +5869,7 @@ def _show_splash():
                 pass
         status_var.trace_add('write', _on_status_change)
 
-        # ── Progress bar (animated) ──
+        # â”€â”€ Progress bar (animated) â”€â”€
         bar_y = H - 14
         bar_w = 220
         bar_x = (W - bar_w) // 2
@@ -5895,19 +5888,19 @@ def _show_splash():
                     _anim_state['dir'] = 1
                 px = bar_x + _anim_state['pos']
                 canvas.coords(progress_rect, px, bar_y, px + 40, bar_y + 3)
-                splash_win.after(30, _animate)
+                root.after(30, _animate)
             except tk.TclError:
                 pass  # Window already destroyed
 
         _animate()
 
-        # ── Animated splash: PIL-rendered text elements animate in + greeting ──
+        # â”€â”€ Animated splash: PIL-rendered text elements animate in + greeting â”€â”€
         _startup_phase = 'splash_effects'
         try:
             logger.info("[SPLASH] Importing splash_effects...")
             from desktop.splash_effects import run_splash_animation
             logger.info("[SPLASH] Running splash animation...")
-            run_splash_animation(canvas, splash_win, W, H)
+            run_splash_animation(canvas, root, W, H)
             logger.info("[SPLASH] Animation engine started")
         except Exception as _fx_err:
             logger.warning(f"[SPLASH] Animation skipped: {_fx_err}")
@@ -5918,17 +5911,13 @@ def _show_splash():
         logger.info("[SPLASH] Splash screen visible")
 
         def close_splash():
-            """Close the splash window safely across all platforms."""
+            """Close the splash window safely on macOS."""
             try:
-                splash_win.withdraw()  # hide immediately
+                root.attributes('-alpha', 0.0)
             except Exception:
                 pass
             try:
-                splash_win.destroy()
-            except Exception:
-                pass
-            try:
-                root.destroy()  # destroy hidden Tk root
+                root.destroy()
             except Exception:
                 pass
 
