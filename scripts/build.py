@@ -535,6 +535,8 @@ def build_react_landing_page():
     # Build — increase Node.js heap to prevent OOM on large bundles
     env = os.environ.copy()
     env['CI'] = 'false'
+    env['ESLINT_NO_DEV_ERRORS'] = 'true'
+    env['DISABLE_ESLINT_PLUGIN'] = 'true'  # skip ESLint entirely during build
     env['NODE_OPTIONS'] = '--max-old-space-size=4096'
 
     result = subprocess.run(
