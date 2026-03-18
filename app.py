@@ -471,7 +471,8 @@ def _load_deferred_config():
 # ── Show static splash.png IMMEDIATELY (before any heavy imports) ──
 # flask, requests, PIL etc. take seconds to import. Show splash first.
 _early_splash = None   # (root, canvas, status_var, photo_ref)
-if '--validate' not in sys.argv and '--install-ai' not in sys.argv and '--background' not in sys.argv and '--help' not in sys.argv and '-h' not in sys.argv:
+_eroot = None
+if getattr(sys, 'frozen', False) and '--validate' not in sys.argv and '--install-ai' not in sys.argv and '--background' not in sys.argv and '--help' not in sys.argv and '-h' not in sys.argv:
     try:
         # Make Tkinter DPI-aware BEFORE creating any windows.
         # Without this, Windows upscales the splash (e.g. 900x560 → 1350x840 at 150% DPI).
@@ -572,16 +573,12 @@ import urllib.parse
 import requests
 
 # Update early splash status after heavy imports
-def _update_early_splash(msg):
-    """Update early splash status and pump event loop so progress bar animates."""
-    if _early_splash:
-        try:
-            _early_splash[3].set(msg)
-            _early_splash[0].update()  # _eroot.update() — safe here, splash is fully set up
-        except Exception:
-            pass
-
-_update_early_splash('Loading modules...')
+if _early_splash:
+    try:
+        _early_splash[3].set('Loading modules...')
+        _early_splash[0].update()
+    except Exception:
+        pass
 
 # Lazy import for webview - only loaded when actually needed (not for --install-ai mode)
 pywebview = None
@@ -629,8 +626,6 @@ def get_webview():
         import webview as _pywebview
         pywebview = _pywebview
     return pywebview
-
-_update_early_splash('Loading AI engine...')
 
 # Import Llama.cpp installer for first-run initialization
 try:
@@ -736,8 +731,6 @@ def _clipboard_monitor_thread():
             pass
         time.sleep(2)
 
-
-_update_early_splash('Preparing interface...')
 
 # Default configuration for stop API URL
 DEFAULT_STOP_API_URL = "http://gcp_training2.hertzai.com:5001/stop"
@@ -2173,8 +2166,6 @@ if getattr(args, 'setup_ai', False):
         else:
             _setup_logger.info("--setup-ai: CLI fallback, no endpoints found, skipping AI setup")
         sys.exit(0)
-
-_update_early_splash('Initializing...')
 
 logger = logging.getLogger('NunbaGUI')
 
@@ -5801,29 +5792,27 @@ def _show_splash():
         import math
 
         logger.info("[SPLASH] Creating Tk root window...")
-        if _eroot is not None:
-            root = _eroot
-            root.deiconify()
-        else:
-            root = tk.Tk()
-        root.overrideredirect(True)  # No title bar / border
+        # Create a single Tk root — no Toplevel, no withdraw/deiconify.
+        # Tk's event loop maps withdrawn roots as white during update().
+        # Only safe approach: one visible root, configured dark from start.
+        root = tk.Tk()
+        root.configure(bg='#0A0914')
+        root.overrideredirect(True)
         root.attributes('-topmost', True)
 
-        # Splash dimensions
         W, H = 900, 560
         sw = root.winfo_screenwidth()
         sh = root.winfo_screenheight()
         x = (sw - W) // 2
         y = (sh - H) // 2
         root.geometry(f"{W}x{H}+{x}+{y}")
-        root.configure(bg='#0A0914')
 
         canvas = tk.Canvas(root, width=W, height=H, bg='#0A0914',
                            highlightthickness=0, bd=0)
         canvas.pack(fill='both', expand=True)
         logger.info(f"[SPLASH] Window created: {W}x{H} at ({x},{y})")
 
-        # â”€â”€ Background: PIL-rendered base (anti-aliased) â”€â”€
+        # â"€â"€ Background: PIL-rendered base (anti-aliased) â"€â"€
         try:
             from PIL import Image, ImageDraw, ImageTk
             _bg = Image.new('RGBA', (W, H), (10, 9, 20, 255))
@@ -5853,9 +5842,9 @@ def _show_splash():
                     canvas.create_oval(dx - 1.5, dy - 1.5, dx + 1.5, dy + 1.5,
                                        fill='#1A1730', outline='')
 
-        # â”€â”€ All text/graphics are now rendered by splash_effects animation engine â”€â”€
+        # â"€â"€ All text/graphics are now rendered by splash_effects animation engine â"€â"€
 
-        # â”€â”€ Status text â€” drawn on canvas (NOT Label widget) so it blends â”€â”€
+        # â"€â"€ Status text â€" drawn on canvas (NOT Label widget) so it blends â"€â"€
         status_var = tk.StringVar(value='Starting up...')
         _status_text_id = canvas.create_text(
             W // 2, H - 32, text='Starting up...',
@@ -5869,7 +5858,7 @@ def _show_splash():
                 pass
         status_var.trace_add('write', _on_status_change)
 
-        # â”€â”€ Progress bar (animated) â”€â”€
+        # â"€â"€ Progress bar (animated) â"€â"€
         bar_y = H - 14
         bar_w = 220
         bar_x = (W - bar_w) // 2
@@ -5894,7 +5883,6 @@ def _show_splash():
 
         _animate()
 
-        # â”€â”€ Animated splash: PIL-rendered text elements animate in + greeting â”€â”€
         _startup_phase = 'splash_effects'
         try:
             logger.info("[SPLASH] Importing splash_effects...")
@@ -5907,11 +5895,10 @@ def _show_splash():
             logger.warning(traceback.format_exc())
 
         logger.info("[SPLASH] Calling root.update()...")
-        root.update()  # process paint + timer events so animation renders
+        root.update()
         logger.info("[SPLASH] Splash screen visible")
 
         def close_splash():
-            """Close the splash window safely on macOS."""
             try:
                 root.attributes('-alpha', 0.0)
             except Exception:
@@ -5941,11 +5928,20 @@ if __name__ == "__main__":
     # _show_splash() reuses _eroot, draws the animated canvas, then we
     # destroy the static Toplevel AFTER the animated one is visible.
     # This eliminates the black flash between static → animated.
-    _early_toplevel_to_destroy = None
+    # Destroy the ENTIRE early splash — root AND Toplevel.
+    # Tk's shared event loop maps the withdrawn root as a white window
+    # during any update() call. Only safe fix: destroy it completely.
     if _early_splash:
-        _early_toplevel_to_destroy = _early_splash[1]  # save reference
+        try:
+            _early_splash[1].destroy()  # Toplevel
+        except Exception:
+            pass
+        try:
+            _early_splash[0].destroy()  # _eroot
+        except Exception:
+            pass
         _early_splash = None
-        # _eroot stays alive — _show_splash reuses it
+    _eroot = None  # force _show_splash to create a fresh Tk()
 
     # Show animated splash screen
     # Skip splash in background mode UNLESS this is the first launch after setup
@@ -5974,13 +5970,8 @@ if __name__ == "__main__":
     _startup_phase = 'post_splash'
     logger.info(f"[STARTUP] Splash returned: root={_splash_root is not None}")
 
-    # NOW destroy the static splash Toplevel — animated one is already visible
-    if _early_toplevel_to_destroy:
-        try:
-            _early_toplevel_to_destroy.destroy()
-        except Exception:
-            pass
-        _early_toplevel_to_destroy = None
+
+    # Early Toplevel already destroyed above (before _show_splash)
 
     def _splash_update_impl(msg):
         try:
