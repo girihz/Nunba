@@ -150,7 +150,12 @@ PLATFORM_DEPS = {
 }
 
 # =============================================================================
-# Torch install config (CPU-only from pytorch index)
+# Torch install config (CPU-only for the build — hardware-agnostic base)
+#
+# Ships CPU torch (~200MB) which works on any hardware. At runtime,
+# tts/package_installer.py detects NVIDIA GPU via nvidia-smi and
+# auto-upgrades to CUDA torch (install_cuda_torch, ~2.5GB one-time download).
+# This way the installer stays small and works everywhere.
 # =============================================================================
 TORCH_INDEX_URL = "https://download.pytorch.org/whl/cpu"
 
@@ -185,12 +190,14 @@ def get_venv_install_list(platform=None):
 def get_embed_install_list(include_torch=False):
     """Get flat list of 'pkg==ver' strings for python-embed pip install.
 
-    Torch is excluded by default (needs special --index-url handling).
-    Pass include_torch=True to include it.
+    Torch and torchaudio are excluded by default — they need the special
+    --index-url for CUDA variant and are installed separately.
+    Pass include_torch=True to include them.
     """
+    _torch_pkgs = {"torch", "torchaudio"}
     deps = []
     for name, ver in EMBED_DEPS.items():
-        if name == "torch" and not include_torch:
+        if name in _torch_pkgs and not include_torch:
             continue
         deps.append(_format_dep(name, ver))
     return deps

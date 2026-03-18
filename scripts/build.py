@@ -626,8 +626,12 @@ def slim_python_embed():
     site_packages = os.path.join(embed_dir, 'Lib', 'site-packages')
     removed_mb = 0
 
-    # Tier 1: Remove dev/build tools (not needed at runtime)
-    dev_packages = ['pip', 'setuptools', '_distutils_hack', 'pkg_resources']
+    # Tier 1: Remove dev/build tools not needed at runtime.
+    # NOTE: pip is KEPT — needed for runtime auto-install of GPU torch,
+    # TTS backends (chatterbox, cosyvoice), and model dependencies.
+    # The install_cuda_torch() and install_backend_full() paths in
+    # tts/package_installer.py call python-embed's pip at runtime.
+    dev_packages = ['_distutils_hack', 'pkg_resources']
     for pkg in dev_packages:
         pkg_dir = os.path.join(site_packages, pkg)
         if os.path.exists(pkg_dir):

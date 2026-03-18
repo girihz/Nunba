@@ -43,6 +43,19 @@ except ImportError:
     def toggle_indicator(show=True, server_port=5000): return False
     def get_status(): return {"active": False, "start_time": 0}
 
+
+def _splash(msg):
+    """Update startup splash status. Safe no-op if splash not available."""
+    try:
+        import app as _app
+        if hasattr(_app, '_startup_splash_update'):
+            _app._startup_splash_update(msg)
+    except Exception:
+        pass
+
+
+_splash('Configuring database...')
+
 # ============== Configure hart-backend for local SQLite ==============
 # Set database path BEFORE importing ANY hart-backend modules (chatbot_routes
 # triggers import chain: adapter → helper → cache_loaders which reads HEVOLVE_DB_PATH
@@ -114,8 +127,10 @@ except Exception as e:
     # In frozen mode the root logger already has gui_app.log handler from app.py.
     logging.warning(f"hartos_backend_adapter import failed: {e}")
 
+_splash('Loading chat routes...')
 from routes import chatbot_routes
 
+_splash('Loading social platform...')
 # Try to import hart-backend directly (pip installed)
 HARTOS_BACKEND_DIRECT = False
 try:
@@ -1299,6 +1314,7 @@ def image_proxy():
 
 # ============== Register API routes BEFORE catch-all ==============
 # Register chatbot routes (includes /chat, /prompts, /tts, /custom_gpt)
+_splash('Registering routes...')
 logging.info("Registering chatbot routes...")
 chatbot_routes.register_routes(app)
 
@@ -1626,6 +1642,7 @@ if CRASH_REPORTER_AVAILABLE:
     except Exception as e:
         logging.warning(f"Failed to initialize crash reporting: {e}")
 
+_splash('Initializing services...')
 # ============== Initialize hart-backend (Local SQLite Database) ==============
 # Deferred to background thread — chat routes are already registered above,
 # so the user can start chatting immediately. Social, agents, peer discovery

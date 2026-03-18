@@ -42,7 +42,7 @@ LLM_LANGCHAIN_SRC = os.path.join(os.path.dirname(PROJECT_DIR),
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
 from deps import (PYTHON_EMBED_VERSION, get_embed_install_list, get_torch_spec,
-                  TORCH_INDEX_URL)
+                  TORCH_INDEX_URL, EMBED_DEPS)
 
 PY_VERSION = PYTHON_EMBED_VERSION
 PY_EMBED_URL = f"https://www.python.org/ftp/python/{PY_VERSION}/python-{PY_VERSION}-embed-amd64.zip"
@@ -147,11 +147,14 @@ def main():
          "setuptools", "wheel",
          "--no-warn-script-location"], timeout=120)
 
-    # Install torch first (large, cpu-only, needs special index URL)
+    # Install torch first (needs special --index-url for CUDA variant)
     torch_spec = get_torch_spec()
-    print(f"  Installing {torch_spec} (CPU)...")
+    torchaudio_ver = EMBED_DEPS.get("torchaudio")
+    torchaudio_spec = f"torchaudio=={torchaudio_ver}" if torchaudio_ver else "torchaudio"
+    print(f"  Installing {torch_spec} + {torchaudio_spec} from {TORCH_INDEX_URL}...")
     run([python_exe, "-m", "pip", "install",
-         torch_spec, "--index-url", TORCH_INDEX_URL,
+         torch_spec, torchaudio_spec,
+         "--index-url", TORCH_INDEX_URL,
          "--no-warn-script-location"], timeout=600)
 
     # Install remaining embed deps from deps.py

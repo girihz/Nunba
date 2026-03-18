@@ -489,18 +489,20 @@ class TTSEngine:
                 logger.debug(f"Backend {backend} skipped: '{required_pkg}' package not installed")
                 return False
 
-        # ── GPU backends need CUDA support in torch ──
+        # ── GPU backends need working CUDA in torch ──
         required_vram = cap.get('vram_gb', 0)
         if required_vram > 0:
-            # Check if torch has actual CUDA support (not just nvidia-smi).
-            # Cache result — torch.cuda.is_available() is expensive on first call.
             if '_torch_cuda' not in TTSEngine._import_check_cache:
                 try:
                     import torch
                     TTSEngine._import_check_cache['_torch_cuda'] = torch.cuda.is_available()
                     if not TTSEngine._import_check_cache['_torch_cuda']:
+                        # Log GPU presence for diagnostics
+                        self._ensure_hw_detected()
                         logger.info(f"torch.cuda.is_available() = False "
-                                    f"(torch {torch.__version__}) — GPU TTS engines disabled")
+                                    f"(torch {torch.__version__}) — "
+                                    f"GPU TTS needs CUDA torch upgrade"
+                                    f"{' (GPU present via nvidia-smi)' if self.has_gpu else ''}")
                 except ImportError:
                     TTSEngine._import_check_cache['_torch_cuda'] = False
                     logger.info("torch not installed — GPU TTS engines disabled")
@@ -531,6 +533,14 @@ class TTSEngine:
         Returns True if packages are already importable (may have been partially
         installed previously), False if install was kicked off in background.
         """
+        # Don't install GPU backends on machines without GPUs — waste of bandwidth
+        cap = ENGINE_CAPABILITIES.get(backend, {})
+        if cap.get('vram_gb', 0) > 0:
+            self._ensure_hw_detected()
+            if not self.has_gpu:
+                logger.debug(f"Skipping auto-install of '{backend}': no GPU detected")
+                return False
+
         # Already failed? Don't retry every request
         if backend in TTSEngine._auto_install_failed:
             logger.debug(f"Auto-install for '{backend}' previously failed, skipping")
@@ -623,11 +633,21 @@ class TTSEngine:
                 cap = ENGINE_CAPABILITIES.get(backend, {})
                 logger.debug(f"Skipped '{backend}' ({cap.get('name', '?')}) for language '{language}'")
 
-                # If top preferred backend is missing packages (not a VRAM issue),
-                # kick off background install so next request gets the GPU engine.
-                if not auto_install_triggered and self._is_missing_packages(backend):
-                    self._try_auto_install_backend(backend)
-                    auto_install_triggered = True
+                # Auto-install: trigger for the first preferred backend that
+                # could work if dependencies were resolved. Covers:
+                #   a) Missing pip package (chatterbox not installed)
+                #   b) Packages present but CUDA torch missing (GPU present)
+                # _try_auto_install_backend guards against no-GPU machines.
+                # install_backend_full handles CUDA upgrade automatically.
+                if not auto_install_triggered:
+                    needs_install = self._is_missing_packages(backend)
+                    needs_cuda_upgrade = (
+                        cap.get('vram_gb', 0) > 0
+                        and not TTSEngine._import_check_cache.get('_torch_cuda', False)
+                    )
+                    if needs_install or needs_cuda_upgrade:
+                        self._try_auto_install_backend(backend)
+                        auto_install_triggered = True
 
         # Absolute fallback — Piper on CPU (no GPU needed, English only)
         logger.info(f"All preferred backends unavailable for '{language}', falling back to Piper (CPU)")

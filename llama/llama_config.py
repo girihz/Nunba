@@ -1108,9 +1108,32 @@ class LlamaConfig:
                 )
                 return False
 
-        # Build command
+        # Build command — context size is VRAM-aware for Qwen3.5
         is_qwen35 = "Qwen3.5" in model_preset.display_name
-        ctx_size = 16384 if is_qwen35 else self.config.get("context_size", 4096)
+        if is_qwen35:
+            # Scale context with available VRAM:
+            #   ≥6GB free → 16384 (full multi-turn agent conversations)
+            #   ≥4GB free → 8192  (standard conversations)
+            #   <4GB free → 4096  (compact, preserves VRAM for TTS/STT)
+            # KV cache cost: ~1GB per 8K context for 4B Q4 model
+            try:
+                from integrations.service_tools.vram_manager import vram_manager
+                free_gb = vram_manager.detect_gpu().get('free_gb', 0)
+                model_gb = model_preset.size_mb / 1024.0
+                remaining = free_gb - model_gb  # VRAM after model loads
+                if remaining >= 3:
+                    ctx_size = 16384
+                elif remaining >= 2.0:
+                    ctx_size = 8192
+                else:
+                    ctx_size = 4096
+                logger.info(f"Dynamic context size: {ctx_size} "
+                            f"(VRAM free={free_gb:.1f}GB, model={model_gb:.1f}GB, "
+                            f"remaining={remaining:.1f}GB)")
+            except Exception:
+                ctx_size = 8192  # safe default
+        else:
+            ctx_size = self.config.get("context_size", 4096)
 
         cmd = [
             llama_server,
