@@ -7,6 +7,41 @@ Connect to Hivemind with your friends' agents.
 # app.py (VERY TOP — before any other imports)
 import os, sys
 
+# Trace recursion in frozen builds — write to file since Win32GUI has no console
+if getattr(sys, 'frozen', False):
+    sys.setrecursionlimit(2000)
+    _import_depth = [0]
+    _max_depth = [0]
+    _import_stack = []
+    _orig_import = __builtins__.__import__ if hasattr(__builtins__, '__import__') else __import__
+
+    def _trace_import(name, *args, **kwargs):
+        _import_depth[0] += 1
+        if _import_depth[0] > _max_depth[0]:
+            _max_depth[0] = _import_depth[0]
+        _import_stack.append(name)
+        if _import_depth[0] > 900:
+            # About to overflow — dump the chain
+            _dump = os.path.join(os.path.expanduser('~'), 'Documents', 'Nunba', 'logs', 'import_recursion.txt')
+            os.makedirs(os.path.dirname(_dump), exist_ok=True)
+            with open(_dump, 'w') as f:
+                f.write(f'Max depth: {_max_depth[0]}\n')
+                f.write(f'Stack depth: {_import_depth[0]}\n\n')
+                for i, m in enumerate(_import_stack):
+                    f.write(f'{i}: {m}\n')
+            os._exit(99)  # Exit before stack overflow kills us
+        try:
+            return _orig_import(name, *args, **kwargs)
+        finally:
+            _import_stack.pop()
+            _import_depth[0] -= 1
+
+    if hasattr(__builtins__, '__import__'):
+        __builtins__.__import__ = _trace_import
+    else:
+        import builtins
+        builtins.__import__ = _trace_import
+
 def _isolate_frozen_imports():
     if not getattr(sys, "frozen", False):
         return
@@ -335,6 +370,30 @@ if getattr(sys, 'frozen', False):
         sys.modules['torch.nn.functional'] = _torch_stub.nn.functional
         del _types, _torch_stub, _bad_torch, _TensorStub, _NoGradStub
 
+    # ── Fix transformers.__init__ frozenset crash in frozen builds ──
+    # transformers 5.x uses `import_structure[frozenset({})]` at line 772.
+    # In cx_Freeze frozen builds, the dict keys resolve differently and the
+    # frozenset({}) key is missing → KeyError at import time.
+    # Fix: patch the transformers/__init__.py file in site-packages to use
+    # .setdefault() instead of direct key access. This survives cx_Freeze tracing.
+    try:
+        import importlib.util as _ilu_tf
+        _tf_spec = _ilu_tf.find_spec('transformers')
+        if _tf_spec and _tf_spec.origin:
+            _tf_init = _tf_spec.origin
+            with open(_tf_init, 'r', encoding='utf-8') as _f:
+                _tf_src = _f.read()
+            _bad_line = 'import_structure[frozenset({})].update(_import_structure)'
+            if _bad_line in _tf_src:
+                _fixed = _tf_src.replace(
+                    _bad_line,
+                    'import_structure.setdefault(frozenset({}), {}).update(_import_structure)'
+                )
+                with open(_tf_init, 'w', encoding='utf-8') as _f:
+                    _f.write(_fixed)
+    except Exception:
+        pass
+
 # ── Deferred startup config ──
 # LLM config, AI key vault, and hardware tier detection are DEFERRED until after
 # the splash screen is visible. These involve disk I/O (config reads), crypto
@@ -357,16 +416,14 @@ def _load_deferred_config():
             with open(_llm_cfg_path, 'r') as _f:
                 _llm_cfg = _json_llm.load(_f)
 
+            # Set HEVOLVE_LOCAL_LLM_URL from config — single source of truth
+            # for all LLM URL resolution. server_port is authoritative over
+            # any stale external_llm_endpoint URL.
+            _cfg_port = str(_llm_cfg.get('server_port', 8080))
+            os.environ.setdefault('HEVOLVE_LOCAL_LLM_URL', f'http://127.0.0.1:{_cfg_port}/v1')
             if _llm_cfg.get('use_external_llm') and _llm_cfg.get('external_llm_endpoint'):
-                _ext = _llm_cfg['external_llm_endpoint']
-                _base = _ext.get('base_url', '')
-                os.environ.setdefault('HEVOLVE_LOCAL_LLM_URL', _base + '/v1')
-                os.environ.setdefault('LLAMA_CPP_PORT', str(_base.rsplit(':', 1)[-1].split('/')[0]))
                 _llm_configured = True
             else:
-                _port = str(_llm_cfg.get('server_port', 8080))
-                os.environ.setdefault('LLAMA_CPP_PORT', _port)
-                os.environ.setdefault('HEVOLVE_LOCAL_LLM_URL', f'http://127.0.0.1:{_port}/v1')
                 _llm_configured = not _llm_cfg.get('first_run', True)
     except Exception:
         pass
@@ -415,8 +472,7 @@ def _load_deferred_config():
 # flask, requests, PIL etc. take seconds to import. Show splash first.
 _early_splash = None   # (root, canvas, status_var, photo_ref)
 _eroot = None
-# Early splash only in frozen builds — creating two Tk() instances (early + animated)
-# causes a ghost white window on Windows due to Tk internal state corruption.
+# Early splash only in frozen builds — two Tk() instances cause ghost white window
 if getattr(sys, 'frozen', False) and '--validate' not in sys.argv and '--install-ai' not in sys.argv and '--background' not in sys.argv and '--help' not in sys.argv and '-h' not in sys.argv:
     try:
         # Make Tkinter DPI-aware BEFORE creating any windows.
@@ -490,7 +546,9 @@ if getattr(sys, 'frozen', False) and '--validate' not in sys.argv and '--install
                     pass
 
             _es_animate()
-            _eroot.update_idletasks()
+            _eroot.update()  # must be update() not update_idletasks() — processes DPI events
+            # Self-destruct: if splash is still alive after 5 min, something hung — kill it
+            _eroot.after(300000, lambda: _eroot.destroy())
             # Store: (hidden_root, toplevel, canvas, status_var, photo_ref)
             _early_splash = (_eroot, _es_top, _es_canvas, _es_status, _es_photo)
         else:
@@ -510,7 +568,8 @@ import ctypes
 from pathlib import Path
 import shutil
 import atexit
-import pyperclip
+# pyperclip lazy-imported in clipboard monitor thread — clipboard API can deadlock
+# if another app holds the clipboard lock during startup
 # waitress is lazy-imported in start_flask() — no top-level import needed
 import urllib.parse
 import requests
@@ -581,17 +640,23 @@ except Exception as _llama_import_err:
     _setup_logger = logging.getLogger('NunbaSetup')
     _setup_logger.warning(f"Llama import failed: {type(_llama_import_err).__name__}: {_llama_import_err}")
 
-try:
-    # macOS requires all NSWindow/Tk() creation on the main thread, but pywebview
-    # owns the main thread — so the Tk-based indicator cannot run on macOS.
-    if sys.platform == 'darwin':
-        raise ImportError("Tk indicator not supported on macOS (NSWindow must be on main thread)")
-    indicator_module = importlib.import_module('desktop.indicator_window')
-    INDICATOR_AVAILABLE = True
-    print("LLM control indicator module loaded successfully")
-except ImportError:
-    INDICATOR_AVAILABLE = False
-    print("LLM control indicator module not available")
+# desktop.indicator_window is lazy-loaded — importing it at module level
+# deadlocks with the early splash's Tk instance. Load on first use instead.
+indicator_module = None
+INDICATOR_AVAILABLE = False
+
+def _load_indicator():
+    """Lazy-load the indicator module after Tk splash is destroyed."""
+    global indicator_module, INDICATOR_AVAILABLE
+    if indicator_module is not None:
+        return
+    try:
+        if sys.platform == 'darwin':
+            return  # macOS: NSWindow must be on main thread
+        indicator_module = importlib.import_module('desktop.indicator_window')
+        INDICATOR_AVAILABLE = True
+    except ImportError:
+        INDICATOR_AVAILABLE = False
 
 # Global variable to track system tray status
 _tray_icon = None
@@ -660,6 +725,7 @@ def _clipboard_monitor_thread():
     global _last_clipboard
     while True:
         try:
+            import pyperclip
             current = pyperclip.paste()
             if current != _last_clipboard:
                 _last_clipboard = current
@@ -961,11 +1027,11 @@ if getattr(args, 'validate', False):
             _vprint(f"    - {_fmod}: {_fmsg}")
         _vprint("")
         _val_log.close()
-        sys.exit(1)
+        os._exit(1)  # os._exit skips Py_Finalize — prevents 0xC0000005 in Win32GUI
     else:
         _vprint(f"\n  All modules bundled correctly. Build is good.\n")
         _val_log.close()
-        sys.exit(0)
+        os._exit(0)  # os._exit skips Py_Finalize — prevents 0xC0000005 in Win32GUI
 
 # Configure logging — use explicit FileHandler instead of basicConfig alone.
 # basicConfig is a no-op if root already has handlers (e.g. when imported from
@@ -2054,10 +2120,9 @@ if getattr(args, 'setup_ai', False):
             config.config["use_external_llm"] = True
             config.mark_first_run_complete()
             config._save_config()
-            # Propagate to env so HARTOS picks it up (same as local llama.cpp path)
-            os.environ['CUSTOM_LLM_BASE_URL'] = base_url
-            if '/v1' not in base_url:
-                os.environ['CUSTOM_LLM_BASE_URL'] = base_url + '/v1'
+            # Propagate to env so HARTOS picks it up via unified resolver
+            _wizard_url = base_url if '/v1' in base_url else base_url + '/v1'
+            os.environ['HEVOLVE_LOCAL_LLM_URL'] = _wizard_url
             _setup_logger.info(f"--setup-ai: custom_api configured, base_url={base_url}, reachable={api_working}")
 
         else:  # skip or window closed
@@ -5178,16 +5243,24 @@ def main():
                     _bg_first_show[0] = False
 
                     def _bg_reload_with_check():
-                        # Check if page already loaded correctly — don't reload if React is live
+                        # WebView2 suspends rendering when window is hidden.
+                        # Even if React mounted while hidden, the canvas is blank.
+                        # ALWAYS force a resize repaint on first show. Only reload
+                        # if the page URL is wrong (about:blank, error).
                         try:
                             _cur_url = _window.get_current_url() or ''
                             if _cur_url and 'localhost' in _cur_url and 'error' not in _cur_url.lower():
-                                # Page looks good — check if React actually mounted
-                                _state = _window.evaluate_js(
-                                    "document.getElementById('root')?.children?.length || 0")
-                                if _state and int(_state) > 0:
-                                    logger.info(f"[BACKGROUND] Page already loaded (root children={_state}) — skipping reload")
-                                    return
+                                # Page URL is correct — just force repaint, no reload needed
+                                logger.info(f"[BACKGROUND] Page loaded while hidden — forcing repaint")
+                                try:
+                                    w, h = _window.width, _window.height
+                                    _window.resize(w + 1, h)
+                                    time.sleep(0.15)
+                                    _window.resize(w, h)
+                                    logger.info("[BACKGROUND] Forced resize repaint on first show")
+                                except Exception:
+                                    pass
+                                return
                         except Exception:
                             pass
 
@@ -6043,14 +6116,17 @@ if __name__ == "__main__":
                     logger.info("Not first run - checking if server should auto-start...")
 
                     # Propagate configured endpoint to env so HARTOS picks it up
+                    # Only propagate external endpoints if we are NOT auto-starting
+                    # a local server — start_server() will set the authoritative URL
                     _ext = llama_config.config.get("external_llm_endpoint")
-                    if llama_config.config.get("use_external_llm") and _ext:
+                    _will_autostart = llama_config.config.get("auto_start_server", True)
+                    if llama_config.config.get("use_external_llm") and _ext and not _will_autostart:
                         _ext_url = _ext.get("base_url", "")
                         if _ext_url:
                             if '/v1' not in _ext_url:
                                 _ext_url = _ext_url.rstrip('/') + '/v1'
-                            os.environ['CUSTOM_LLM_BASE_URL'] = _ext_url
-                            logger.info(f"External LLM endpoint propagated: CUSTOM_LLM_BASE_URL={_ext_url}")
+                            os.environ['HEVOLVE_LOCAL_LLM_URL'] = _ext_url
+                            logger.info(f"External LLM endpoint propagated: HEVOLVE_LOCAL_LLM_URL={_ext_url}")
                     elif llama_config.is_cloud_configured():
                         try:
                             from desktop.ai_key_vault import AIKeyVault

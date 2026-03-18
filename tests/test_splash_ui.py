@@ -1,132 +1,204 @@
 """
-UI test for Nunba splash screen — verifies dark background, no white flash.
+UI test for Nunba splash screen — verifies no white flash during
+static splash, animated splash, and static-to-animated transition.
 
-Finds the actual Tk splash window via Win32 API, brings it to front,
-screenshots it, and verifies the average luminance is dark (< 80).
+Uses Win32 PrintWindow API to capture the actual window content
+regardless of z-order (works even when other windows are on top).
 
-Run: python tests/test_splash_ui.py
+Run:
+    python tests/test_splash_ui.py              # dev mode (animated only)
+    python tests/test_splash_ui.py --frozen     # simulates frozen mode (static + animated)
+
+Requires: PIL (Pillow)
 """
 import ctypes
 import ctypes.wintypes
+import os
+import shutil
+import struct
 import subprocess
 import sys
 import time
-import os
 
-def find_borderless_tk_window():
-    """Find borderless Tk window (the splash)."""
-    user32 = ctypes.windll.user32
-    results = []
 
-    def enum_cb(hwnd, _):
+user32 = ctypes.windll.user32
+gdi32 = ctypes.windll.gdi32
+
+
+def find_tk_windows():
+    """Find all visible Tk windows via EnumWindows."""
+    wins = []
+
+    def cb(hwnd, _):
         if user32.IsWindowVisible(hwnd):
-            rect = ctypes.wintypes.RECT()
-            user32.GetWindowRect(hwnd, ctypes.byref(rect))
-            w = rect.right - rect.left
-            h = rect.bottom - rect.top
-            style = user32.GetWindowLongW(hwnd, -16)
-            borderless = not (style & 0x00C00000)  # no WS_CAPTION
-            if borderless and 300 <= w <= 1000 and 200 <= h <= 700:
-                length = user32.GetWindowTextLengthW(hwnd)
-                buf = ctypes.create_unicode_buffer(length + 1)
-                user32.GetWindowTextW(hwnd, buf, length + 1)
-                results.append({
-                    'hwnd': hwnd, 'title': buf.value,
-                    'x': rect.left, 'y': rect.top, 'w': w, 'h': h,
-                })
+            cls = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, cls, 256)
+            if "Tk" in cls.value:
+                rect = ctypes.wintypes.RECT()
+                user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                w = rect.right - rect.left
+                h = rect.bottom - rect.top
+                if w > 10 and h > 10:
+                    wins.append({"hwnd": hwnd, "w": w, "h": h, "cls": cls.value})
         return True
 
     WNDENUMPROC = ctypes.WINFUNCTYPE(
-        ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
-    user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
+        ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
+    )
+    user32.EnumWindows(WNDENUMPROC(cb), 0)
+    return wins
 
-    # Filter to tk/empty title (splash)
-    return [w for w in results if w['title'].lower() in ('tk', '')]
+
+def capture_window(hwnd, w, h):
+    """Capture a window via PrintWindow (z-order independent)."""
+    from PIL import Image
+
+    dc = user32.GetWindowDC(hwnd)
+    mdc = gdi32.CreateCompatibleDC(dc)
+    bmp = gdi32.CreateCompatibleBitmap(dc, w, h)
+    gdi32.SelectObject(mdc, bmp)
+    user32.PrintWindow(hwnd, mdc, 2)  # PW_RENDERFULLCONTENT
+    buf = ctypes.create_string_buffer(w * h * 4)
+    bi = struct.pack("LLLHHLLLLLL", 40, w, h, 1, 32, 0, w * h * 4, 0, 0, 0, 0)
+    gdi32.GetDIBits(mdc, bmp, 0, h, buf, bi, 0)
+    img = Image.frombuffer("RGBA", (w, h), buf, "raw", "BGRA", 0, -1)
+    gdi32.DeleteObject(bmp)
+    gdi32.DeleteDC(mdc)
+    user32.ReleaseDC(hwnd, dc)
+    return img
 
 
-def test_splash_no_white():
-    from PIL import ImageGrab
+def analyze_center(img, margin=40):
+    """Measure luminance of the center region."""
+    w, h = img.size
+    cx, cy = w // 2, h // 2
+    m = min(margin, max(1, cx - 1), max(1, cy - 1))
+    center = img.crop((cx - m, cy - m, cx + m, cy + m))
+    px = list(center.getdata())
+    if not px:
+        return 0.0, "EMPTY"
+    lum = sum(0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2] for p in px) / len(px)
+    if lum > 200:
+        return lum, "WHITE"
+    elif lum < 80:
+        return lum, "DARK"
+    return lum, "MID"
 
+
+def run_test(frozen_mode=False):
+    """Run the splash UI test.
+
+    Args:
+        frozen_mode: if True, patches app.py to enable early splash
+                     (simulates frozen exe where both static + animated show)
+    """
     app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     save_dir = os.path.dirname(os.path.abspath(__file__))
-    user32 = ctypes.windll.user32
+    app_file = os.path.join(app_dir, "app.py")
+    test_file = None
 
-    print("Starting Nunba...")
+    if frozen_mode:
+        # Patch: remove the frozen guard so early splash runs in dev
+        test_file = os.path.join(app_dir, "_test_splash_app.py")
+        with open(app_file, "r", encoding="utf-8") as f:
+            src = f.read()
+        src = src.replace(
+            "if getattr(sys, 'frozen', False) and '--validate'",
+            "if '--validate'",
+        )
+        with open(test_file, "w", encoding="utf-8") as f:
+            f.write(src)
+        target = test_file
+        mode_label = "FROZEN (static + animated)"
+    else:
+        target = app_file
+        mode_label = "DEV (animated only)"
+
+    print(f"Splash UI Test [{mode_label}]")
+    print(f"{'=' * 60}")
+
     proc = subprocess.Popen(
-        [sys.executable, os.path.join(app_dir, 'app.py')],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        [sys.executable, target],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         cwd=app_dir,
     )
 
+    print(f"Time   #wins  Lum    Status   Size")
+    print(f"{'-' * 55}")
+
     frames = []
     try:
-        for i in range(16):
+        sample_count = 35 if frozen_mode else 20
+        for i in range(sample_count):
             time.sleep(0.3)
             t = (i + 1) * 0.3
-
-            wins = find_borderless_tk_window()
+            wins = find_tk_windows()
             if not wins:
-                print(f"  t={t:.1f}s: waiting for splash...")
+                if t <= 2.0:
+                    print(f"{t:4.1f}s  0      -      waiting")
                 continue
-
-            win = wins[0]
-            # Bring to absolute front
-            user32.SetForegroundWindow(win['hwnd'])
-            user32.BringWindowToTop(win['hwnd'])
-            time.sleep(0.05)
-
-            img = ImageGrab.grab(bbox=(
-                win['x'], win['y'],
-                win['x'] + win['w'], win['y'] + win['h']))
-
-            # Analyze center region (avoid edges/title bars)
-            cx, cy = win['w'] // 2, win['h'] // 2
-            margin = 40
-            center = img.crop((cx - margin, cy - margin, cx + margin, cy + margin))
-            pixels = list(center.getdata())
-            avg_r = sum(p[0] for p in pixels) / len(pixels)
-            avg_g = sum(p[1] for p in pixels) / len(pixels)
-            avg_b = sum(p[2] for p in pixels) / len(pixels)
-            lum = 0.299 * avg_r + 0.587 * avg_g + 0.114 * avg_b
-
-            status = "WHITE" if lum > 200 else ("DARK" if lum < 80 else "MID")
-            print(f"  t={t:.1f}s: size={win['w']}x{win['h']} "
-                  f"center=({avg_r:.0f},{avg_g:.0f},{avg_b:.0f}) "
-                  f"lum={lum:.0f} [{status}]")
-
-            frames.append((t, lum, status, img))
-
-            if status == "WHITE":
-                img.save(os.path.join(save_dir, f'splash_white_t{t:.1f}.png'))
-
+            for win in wins:
+                img = capture_window(win["hwnd"], win["w"], win["h"])
+                lum, status = analyze_center(img)
+                frames.append(
+                    {
+                        "t": t,
+                        "nwins": len(wins),
+                        "lum": lum,
+                        "status": status,
+                        "w": win["w"],
+                        "h": win["h"],
+                        "img": img,
+                    }
+                )
+                print(
+                    f"{t:4.1f}s  {len(wins):1d}      {lum:5.0f}  {status:6s}   "
+                    f"{win['w']}x{win['h']}"
+                )
     finally:
         proc.terminate()
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+        if test_file and os.path.exists(test_file):
+            os.remove(test_file)
 
+    # Save key frames
     if frames:
-        frames[0][3].save(os.path.join(save_dir, 'splash_first.png'))
-        frames[-1][3].save(os.path.join(save_dir, 'splash_last.png'))
+        frames[0]["img"].save(os.path.join(save_dir, "splash_test_first.png"))
+        frames[-1]["img"].save(os.path.join(save_dir, "splash_test_last.png"))
+        mid = frames[len(frames) // 2]
+        mid["img"].save(os.path.join(save_dir, "splash_test_mid.png"))
 
-    print(f"\n{'=' * 50}")
-    white = [f for f in frames if f[2] == 'WHITE']
-    dark = [f for f in frames if f[2] == 'DARK']
+    # Results
+    white_frames = [f for f in frames if f["status"] == "WHITE"]
+    dark_frames = [f for f in frames if f["status"] == "DARK"]
+    multi_win = [f for f in frames if f["nwins"] > 1]
 
+    print(f"\n{'=' * 60}")
+    print(f"Frames:     {len(frames)} total, {len(dark_frames)} dark, "
+          f"{len(white_frames)} white")
+    print(f"Multi-win:  {len(multi_win)} (should be 0)")
+
+    passed = True
     if not frames:
-        print("FAIL: No splash window found!")
-        return False
-    elif white:
-        print(f"FAIL: White in {len(white)}/{len(frames)} frames")
-        return False
-    else:
-        avg_lum = sum(f[1] for f in frames) / len(frames)
-        print(f"PASS: {len(frames)} frames, avg lum={avg_lum:.0f}, "
-              f"{len(dark)} dark, 0 white")
-        return True
+        print("FAIL: No splash window detected!")
+        passed = False
+    if white_frames:
+        print(f"FAIL: White detected at t={white_frames[0]['t']:.1f}s")
+        passed = False
+    if multi_win:
+        print(f"FAIL: Multiple windows at t={multi_win[0]['t']:.1f}s")
+        passed = False
+
+    if passed:
+        print("PASS")
+    return passed
 
 
-if __name__ == '__main__':
-    ok = test_splash_no_white()
+if __name__ == "__main__":
+    frozen = "--frozen" in sys.argv
+    ok = run_test(frozen_mode=frozen)
     sys.exit(0 if ok else 1)
