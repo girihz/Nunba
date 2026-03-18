@@ -3,6 +3,7 @@
   "plugins": ["security"],
   "rules": {
     "import/first": "off",
+    "import/no-unresolved": "off",
     "no-unused-expressions": "off",
     "security/detect-object-injection": "warn",
     "security/detect-non-literal-regexp": "warn",
