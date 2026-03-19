@@ -680,6 +680,8 @@ def _hotkey_listener_thread():
     Uses ctypes to call RegisterHotKey/GetMessage on Windows. The thread runs its own
     message loop so the hotkey works even when the app is in the background/tray.
     """
+    if sys.platform != 'win32':
+        return
     global _window_visible
     import ctypes
     import ctypes.wintypes

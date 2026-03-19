@@ -115,6 +115,8 @@ custom_sessions = {}
 _CREATE_AGENT_EXACT = {
     'create an agent', 'create agent', 'build an agent', 'build agent',
     'make an agent', 'create a new agent', 'train an agent', 'train agent',
+    'i want a new agent', 'i want an agent', 'i want to create',
+    'i need a new agent', 'i need an agent', 'new agent',
 }
 
 def _detect_create_agent_intent(text):
