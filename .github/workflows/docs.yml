@@ -44,40 +44,87 @@ jobs:
           name: docs-site
           path: site/
 
-  # ── Run Cypress E2E tests with coverage ──
+  # ── Run Cypress E2E tests with full backend ──
   test-reports:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: landing-page
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      - name: Checkout hart-backend
+        uses: actions/checkout@v4
+        with:
+          repository: hertz-ai/HARTOS
+          path: _deps/HARTOS
+          token: ${{ secrets.HEVOLVE_REPO_TOKEN || github.token }}
+        continue-on-error: true
+
+      - name: Symlink sibling repos
+        run: |
+          ln -sf "$GITHUB_WORKSPACE/_deps/HARTOS" ../HARTOS || true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Install dependencies
+      # Install Python backend dependencies
+      - name: Install Python dependencies
+        run: |
+          pip install flask flask-cors waitress requests pywebview pillow \
+            sqlalchemy alembic greenlet pyjwt cryptography python-jose \
+            autobahn[twisted] crossbarhttp3 numpy langchain-classic \
+            langchain-core langchain-community langsmith apscheduler \
+            json-repair beautifulsoup4 redis aiohttp python-dotenv \
+            sentry-sdk pyperclip pydantic fastapi 2>&1 | tail -5
+          # Install HARTOS if available
+          if [ -d ../HARTOS ]; then
+            pip install --no-deps ../HARTOS 2>&1 | tail -3
+          fi
+
+      # Build React frontend
+      - name: Install frontend dependencies
+        working-directory: landing-page
         run: npm ci --legacy-peer-deps
 
-      # Start React dev server with coverage instrumentation
-      - name: Start dev server (with coverage)
-        run: |
-          CYPRESS_COVERAGE=true npx react-app-rewired start &
-          npx wait-on http://localhost:3000 --timeout 60000
+      - name: Build React (production)
+        working-directory: landing-page
+        run: npx react-app-rewired build
         env:
-          BROWSER: none
-          CYPRESS_COVERAGE: 'true'
+          CI: 'false'
+          DISABLE_ESLINT_PLUGIN: 'true'
+          NODE_OPTIONS: '--max-old-space-size=4096'
 
-      # Run Cypress with Mochawesome reporter
-      - name: Run Cypress E2E tests
-        run: npx cypress run --browser chrome
-        continue-on-error: true  # Don't fail the workflow if tests fail (still deploy report)
+      # Start Flask backend serving the React build
+      - name: Start Nunba backend
+        run: |
+          python app.py --port 5000 --background &
+          # Wait for Flask to be ready
+          for i in $(seq 1 30); do
+            if curl -s http://127.0.0.1:5000/cors/test > /dev/null 2>&1; then
+              echo "Backend ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
         env:
-          CYPRESS_COVERAGE: 'true'
+          HEVOLVE_NODE_TIER: 'flat'
+          HEVOLVE_DEV_MODE: 'true'
+
+      # Run Cypress E2E tests against the full stack
+      - name: Run Cypress E2E tests
+        working-directory: landing-page
+        run: npx cypress run --browser chrome
+        continue-on-error: true
+        env:
+          CYPRESS_BASE_URL: 'http://localhost:5000'
 
       # Generate NYC coverage report
       - name: Generate coverage report
+        working-directory: landing-page
         run: |
           npx nyc report --reporter=html --report-dir=coverage
         continue-on-error: true
@@ -120,7 +167,7 @@ jobs:
         with:
           name: test-reports
           path: site/test-reports/
-        continue-on-error: true  # Deploy docs even if tests weren't run
+        continue-on-error: true
 
       - name: Download coverage report
         uses: actions/download-artifact@v4
