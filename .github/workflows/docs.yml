@@ -132,25 +132,45 @@ jobs:
       # Start Flask backend serving the React build (headless, no GUI)
       - name: Start Nunba backend
         run: |
-          # Start main.py directly (Flask only, no Tk/webview GUI)
-          # app.py needs tkinter/pywebview which aren't on CI runners
-          python -c "
-          import sys, os
+          # Create a minimal server script that starts Flask without GUI deps
+          cat > _ci_server.py << 'PYEOF'
+          import sys, os, logging
           sys.path.insert(0, '.')
           os.environ['HEVOLVE_NODE_TIER'] = 'flat'
           os.environ['HEVOLVE_DEV_MODE'] = 'true'
-          from main import app
+          os.environ['HEVOLVE_ENFORCEMENT_MODE'] = 'off'
+          logging.basicConfig(level=logging.INFO)
+          try:
+              from main import app
+              print("Flask app imported successfully", flush=True)
+          except Exception as e:
+              print(f"FATAL: Failed to import main: {e}", flush=True)
+              import traceback; traceback.print_exc()
+              sys.exit(1)
           from waitress import serve
+          print("Starting waitress on :5000...", flush=True)
           serve(app, host='127.0.0.1', port=5000, threads=4)
-          " &
-          # Wait for Flask to be ready (up to 60s for heavy imports)
-          for i in $(seq 1 60); do
+          PYEOF
+          python _ci_server.py > /tmp/backend.log 2>&1 &
+          BACKEND_PID=$!
+          echo "Backend PID: $BACKEND_PID"
+
+          # Wait for Flask to be ready (up to 90s)
+          for i in $(seq 1 90); do
             if curl -s http://127.0.0.1:5000/cors/test > /dev/null 2>&1; then
               echo "Backend ready after ${i}s"
               break
             fi
-            if [ $i -eq 60 ]; then
-              echo "WARNING: Backend did not start within 60s"
+            # Check if process died
+            if ! kill -0 $BACKEND_PID 2>/dev/null; then
+              echo "FATAL: Backend process died"
+              cat /tmp/backend.log
+              exit 1
+            fi
+            if [ $i -eq 90 ]; then
+              echo "WARNING: Backend did not start within 90s"
+              echo "=== Backend log ==="
+              cat /tmp/backend.log
             fi
             sleep 1
           done
