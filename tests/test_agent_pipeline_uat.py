@@ -78,11 +78,25 @@ MOCK_SOCIAL_AGENT = 'hart_intelligence._create_social_agent_from_prompt'
 
 
 def _ensure_recipe_mocks(lgapi):
-    """Ensure recipe/chat_agent are set on the module (may be None from failed import)."""
+    """Ensure recipe/chat_agent are set on the module (may be None from failed import).
+
+    When autogen is not installed, create_recipe and reuse_recipe fail to import,
+    leaving these as None. We inject MagicMocks so the /chat pipeline doesn't crash
+    with 'NoneType is not callable'.
+    """
     if lgapi.recipe is None:
         lgapi.recipe = MagicMock(return_value='Reviewing')
     if lgapi.chat_agent is None:
         lgapi.chat_agent = MagicMock(return_value='Reuse response')
+    # Also stub create_recipe/reuse_recipe modules if not importable
+    if 'create_recipe' not in sys.modules or sys.modules['create_recipe'] is None:
+        _cr = types.ModuleType('create_recipe')
+        _cr.recipe = lgapi.recipe
+        sys.modules['create_recipe'] = _cr
+    if 'reuse_recipe' not in sys.modules or sys.modules['reuse_recipe'] is None:
+        _rr = types.ModuleType('reuse_recipe')
+        _rr.chat_agent = lgapi.chat_agent
+        sys.modules['reuse_recipe'] = _rr
 
 
 def _get_lgapi():
@@ -167,8 +181,20 @@ class _AgentPipelineTestBase(unittest.TestCase):
         self.lgapi.PROMPTS_DIR = self.temp_dir
         _ensure_recipe_mocks(self.lgapi)
         _reset_state(self.lgapi, self.temp_dir)
+        # Patch recipe/chat_agent in hart_intelligence_entry (where chat() is defined).
+        # star-import copies values, so patching hart_intelligence doesn't reach
+        # chat()'s globals which point to hart_intelligence_entry.__dict__.
+        import hart_intelligence_entry as _hie
+        self._recipe_patcher = patch.object(
+            _hie, 'recipe', MagicMock(return_value='Reviewing'))
+        self._chat_agent_patcher = patch.object(
+            _hie, 'chat_agent', MagicMock(return_value='Reuse response'))
+        self._recipe_patcher.start()
+        self._chat_agent_patcher.start()
 
     def tearDown(self):
+        self._recipe_patcher.stop()
+        self._chat_agent_patcher.stop()
         self.lgapi.PROMPTS_DIR = self._orig_prompts
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 

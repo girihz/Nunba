@@ -44,40 +44,148 @@ jobs:
           name: docs-site
           path: site/
 
-  # ── Run Cypress E2E tests with coverage ──
+  # ── Run Cypress E2E tests with full backend ──
   test-reports:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: landing-page
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      - name: Checkout hart-backend
+        uses: actions/checkout@v4
+        with:
+          repository: hertz-ai/HARTOS
+          path: _deps/HARTOS
+          token: ${{ secrets.HEVOLVE_REPO_TOKEN || github.token }}
+        continue-on-error: true
+
+      - name: Checkout HevolveAI (source, if accessible)
+        uses: actions/checkout@v4
+        with:
+          repository: hertz-ai/HevolveAI
+          path: _deps/hevolveai
+          token: ${{ secrets.HEVOLVE_REPO_TOKEN || github.token }}
+        continue-on-error: true
+
+      - name: Checkout Hevolve_Database
+        uses: actions/checkout@v4
+        with:
+          repository: hertz-ai/Hevolve_Database
+          path: _deps/Hevolve_Database
+          token: ${{ secrets.HEVOLVE_REPO_TOKEN || github.token }}
+        continue-on-error: true
+
+      - name: Symlink sibling repos
+        run: |
+          ln -sf "$GITHUB_WORKSPACE/_deps/HARTOS" ../HARTOS || true
+          ln -sf "$GITHUB_WORKSPACE/_deps/hevolveai" ../hevolveai || true
+          ln -sf "$GITHUB_WORKSPACE/_deps/Hevolve_Database" ../Hevolve_Database || true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Install dependencies
+      # Install Python backend + all transitive dependencies
+      # Uses the same install logic as scripts/build.py:
+      #   1. Local sibling source (if checkout succeeded)
+      #   2. Compiled wheel from HARTOS (if source unavailable)
+      #   3. pip install from requirements.txt as baseline
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements.txt 2>&1 | tail -5
+
+          # Install sibling deps in order (same as build.py):
+          # hevolve-database → hevolveai → hart-backend
+          for dep_dir in ../Hevolve_Database ../hevolveai ../HARTOS; do
+            if [ -f "$dep_dir/pyproject.toml" ] || [ -f "$dep_dir/setup.py" ]; then
+              echo "Installing $(basename $dep_dir) from source..."
+              pip install --no-deps "$dep_dir" 2>&1 | tail -2
+            fi
+          done
+
+          # Fallback: if hevolveai source not available, try compiled wheel
+          if ! python -c "import hevolveai" 2>/dev/null; then
+            if [ -d ../HARTOS/scripts/build_compiled_wheel.py ]; then
+              echo "hevolveai source unavailable — building compiled wheel..."
+              python ../HARTOS/scripts/build_compiled_wheel.py --all 2>&1 | tail -5
+              pip install dist/embodied_ai-*.whl 2>/dev/null || true
+            fi
+          fi
+
+      # Build React frontend
+      - name: Install frontend dependencies
+        working-directory: landing-page
         run: npm ci --legacy-peer-deps
 
-      # Start React dev server with coverage instrumentation
-      - name: Start dev server (with coverage)
-        run: |
-          CYPRESS_COVERAGE=true npx react-app-rewired start &
-          npx wait-on http://localhost:3000 --timeout 60000
+      - name: Build React (production)
+        working-directory: landing-page
+        run: npx react-app-rewired build
         env:
-          BROWSER: none
-          CYPRESS_COVERAGE: 'true'
+          CI: 'false'
+          DISABLE_ESLINT_PLUGIN: 'true'
+          NODE_OPTIONS: '--max-old-space-size=4096'
 
-      # Run Cypress with Mochawesome reporter
+      # Start Flask backend serving the React build (headless, no GUI)
+      - name: Start Nunba backend
+        run: |
+          # Create a minimal server script that starts Flask without GUI deps
+          cat > _ci_server.py << 'PYEOF'
+          import sys, os, logging
+          sys.path.insert(0, '.')
+          os.environ['HEVOLVE_NODE_TIER'] = 'flat'
+          os.environ['HEVOLVE_DEV_MODE'] = 'true'
+          os.environ['HEVOLVE_ENFORCEMENT_MODE'] = 'off'
+          logging.basicConfig(level=logging.INFO)
+          try:
+              from main import app
+              print("Flask app imported successfully", flush=True)
+          except Exception as e:
+              print(f"FATAL: Failed to import main: {e}", flush=True)
+              import traceback; traceback.print_exc()
+              sys.exit(1)
+          from waitress import serve
+          print("Starting waitress on :5000...", flush=True)
+          serve(app, host='127.0.0.1', port=5000, threads=4)
+          PYEOF
+          python _ci_server.py > /tmp/backend.log 2>&1 &
+          BACKEND_PID=$!
+          echo "Backend PID: $BACKEND_PID"
+
+          # Wait for Flask to be ready (up to 90s)
+          for i in $(seq 1 90); do
+            if curl -s http://127.0.0.1:5000/cors/test > /dev/null 2>&1; then
+              echo "Backend ready after ${i}s"
+              break
+            fi
+            # Check if process died
+            if ! kill -0 $BACKEND_PID 2>/dev/null; then
+              echo "FATAL: Backend process died"
+              cat /tmp/backend.log
+              exit 1
+            fi
+            if [ $i -eq 90 ]; then
+              echo "WARNING: Backend did not start within 90s"
+              echo "=== Backend log ==="
+              cat /tmp/backend.log
+            fi
+            sleep 1
+          done
+
+      # Run Cypress E2E tests against the full stack
       - name: Run Cypress E2E tests
+        working-directory: landing-page
         run: npx cypress run --browser chrome
-        continue-on-error: true  # Don't fail the workflow if tests fail (still deploy report)
+        continue-on-error: true
         env:
-          CYPRESS_COVERAGE: 'true'
+          CYPRESS_BASE_URL: 'http://localhost:5000'
 
       # Generate NYC coverage report
       - name: Generate coverage report
+        working-directory: landing-page
         run: |
           npx nyc report --reporter=html --report-dir=coverage
         continue-on-error: true
@@ -120,7 +228,7 @@ jobs:
         with:
           name: test-reports
           path: site/test-reports/
-        continue-on-error: true  # Deploy docs even if tests weren't run
+        continue-on-error: true
 
       - name: Download coverage report
         uses: actions/download-artifact@v4
