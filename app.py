@@ -80,6 +80,13 @@ def _isolate_frozen_imports():
 
 _isolate_frozen_imports()
 
+# === User-writable site-packages (runtime pip installs go here) ===
+# Program Files is read-only for non-admin. Packages installed at runtime
+# (e.g. CUDA torch, TTS engines) go to ~/.nunba/site-packages/ instead.
+_user_sp = os.path.join(os.path.expanduser('~'), '.nunba', 'site-packages')
+if os.path.isdir(_user_sp) and _user_sp not in sys.path:
+    sys.path.insert(0, _user_sp)
+
 # === Single-instance guard ===
 # Prevent multiple Nunba processes (Windows auto-start + manual launch).
 # Check if port 5000 is already bound by another Nunba — if so, bring it

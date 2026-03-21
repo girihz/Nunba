@@ -781,6 +781,63 @@ def build_windows(python_exe, app_only=False, installer_only=False):
 
     print_info(f"Build successful: {exe_path}")
 
+    # ── Sync HARTOS source into python-embed ──────────────────────────
+    # The source python-embed/ is a snapshot that may contain stale HARTOS
+    # files from a previous build. cx_Freeze copies modules via include_files
+    # but the post-build copytree from python-embed/ can overwrite them.
+    # This step ensures both the source python-embed/ AND the build output
+    # always have the latest HARTOS files from the sibling source directory.
+    _hartos_src = _find_local_hartos_backend()
+    if _hartos_src:
+        _embed_sp = os.path.join(embed_src, 'Lib', 'site-packages')
+        _build_sp = os.path.join('build', 'Nunba', 'python-embed', 'Lib', 'site-packages')
+        _synced = 0
+
+        # Sync top-level HARTOS .py modules (hart_intelligence_entry.py, create_recipe.py, etc.)
+        for _fname in os.listdir(_hartos_src):
+            if _fname.endswith('.py') and not _fname.startswith(('setup', 'embedded_main', 'conftest')):
+                _src_file = os.path.join(_hartos_src, _fname)
+                for _dst_dir in [_embed_sp, _build_sp]:
+                    if os.path.isdir(_dst_dir):
+                        _dst_file = os.path.join(_dst_dir, _fname)
+                        if os.path.exists(_dst_file):
+                            # Only copy if source is newer or different size
+                            _src_size = os.path.getsize(_src_file)
+                            _dst_size = os.path.getsize(_dst_file)
+                            if _src_size != _dst_size:
+                                shutil.copy2(_src_file, _dst_file)
+                                _synced += 1
+
+        # Sync HARTOS packages (integrations/, core/, security/, agent-ledger)
+        for _pkg_name in ['integrations', 'core', 'security']:
+            _pkg_src = os.path.join(_hartos_src, _pkg_name)
+            if os.path.isdir(_pkg_src):
+                for _dst_dir in [_embed_sp, _build_sp]:
+                    _pkg_dst = os.path.join(_dst_dir, _pkg_name)
+                    if os.path.isdir(_pkg_dst):
+                        # Walk source and copy changed files
+                        for _root, _dirs, _files in os.walk(_pkg_src):
+                            for _f in _files:
+                                if _f.endswith('.py'):
+                                    _rel = os.path.relpath(os.path.join(_root, _f), _pkg_src)
+                                    _s = os.path.join(_root, _f)
+                                    _d = os.path.join(_pkg_dst, _rel)
+                                    if os.path.exists(_d):
+                                        if os.path.getsize(_s) != os.path.getsize(_d):
+                                            os.makedirs(os.path.dirname(_d), exist_ok=True)
+                                            shutil.copy2(_s, _d)
+                                            _synced += 1
+                                    else:
+                                        # New file — copy it
+                                        os.makedirs(os.path.dirname(_d), exist_ok=True)
+                                        shutil.copy2(_s, _d)
+                                        _synced += 1
+
+        if _synced:
+            print_info(f"Synced {_synced} HARTOS file(s) into python-embed (source -> build)")
+        else:
+            print_info("HARTOS files in python-embed are up to date")
+
     # Strip HevolveAI source from python-embed (proprietary — .pyc only)
     _compile_script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     '..', '..', 'HARTOS', 'scripts', 'compile_hevolveai.py')

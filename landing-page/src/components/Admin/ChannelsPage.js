@@ -178,7 +178,7 @@ export default function ChannelsPage() {
     setActionLoading('create');
     try {
       const res = await channelsApi.create({
-        type: newChannel.type,
+        channel_type: newChannel.type,
         name: newChannel.name,
         config: newChannel.token ? {token: newChannel.token} : {},
       });
