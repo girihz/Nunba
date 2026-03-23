@@ -144,8 +144,12 @@ if getattr(sys, 'frozen', False):
         except Exception:
             return True
     # Always replace — broken fd might pass write test but fail later
-    sys.stdout = _safe_devnull()
-    sys.stderr = _safe_devnull()
+    # Write to a debug log file for frozen builds
+    _frozen_log_dir = os.path.join(os.path.expanduser('~'), 'Library', 'Application Support', 'Nunba', 'logs')
+    os.makedirs(_frozen_log_dir, exist_ok=True)
+    _frozen_log = open(os.path.join(_frozen_log_dir, 'frozen_debug.log'), 'w', encoding='utf-8')
+    sys.stdout = _frozen_log
+    sys.stderr = _frozen_log
 
 import os
 import sys
@@ -3603,30 +3607,24 @@ def setup_connectivity_monitor(window, port):
     window.events.loaded += on_page_loaded
 
 
+def _dynamic_wsgi_app(environ, start_response):
+    """WSGI dispatcher that routes to flask_app (full) when available, else gui_app."""
+    app = flask_app if flask_app is not None else gui_app
+    return app(environ, start_response)
+
+
 def start_flask():
     """Start the Flask server in a separate thread.
 
-    If main.py hasn't finished importing yet (flask_app is None), starts
-    with the lightweight gui_app first so the webview can load the React
-    SPA immediately. A background thread waits for flask_app and restarts
-    Waitress with the full app when ready.
+    Uses a dynamic WSGI dispatcher so that once main.py finishes importing
+    and sets flask_app, all new requests are automatically routed to the
+    full Flask app — no server restart needed.
     """
     global flask_app
     _serving_app = flask_app
     if _serving_app is None:
-        logger.info("flask_app not ready yet — serving lightweight gui_app first")
+        logger.info("flask_app not ready yet — serving dynamic dispatcher (gui_app until main.py loads)")
         _serving_app = gui_app
-
-        # Background hot-swap: wait for main.py import, then reload webview
-        def _hot_swap():
-            for _ in range(300):  # wait up to 5 min
-                time.sleep(1)
-                if flask_app is not None:
-                    logger.info("[HOT-SWAP] main.py ready — webview will use full app on next reload")
-                    return
-            logger.warning("[HOT-SWAP] main.py never loaded after 5 min")
-
-        threading.Thread(target=_hot_swap, daemon=True, name='flask-hot-swap').start()
     try:
         # Add CORS preflight handler for all routes
         # Use _serving_app (gui_app when flask_app is None, flask_app when ready)
@@ -4504,12 +4502,14 @@ def start_flask():
             })
 
         # Start the Flask application via waitress (production WSGI)
-        # Use _serving_app — may be gui_app (lightweight) or flask_app (full)
+        # Use _dynamic_wsgi_app when flask_app isn't ready yet — it will
+        # automatically route to flask_app once main.py import completes.
+        _wsgi_target = _serving_app if _serving_app is flask_app else _dynamic_wsgi_app
         # Lazy import — avoids crash if waitress wasn't bundled in frozen exe
         try:
             from waitress import serve as _serve
-            logger.info(f"Starting Waitress server on port {args.port} (app={'full' if _serving_app is flask_app else 'lightweight'})")
-            _serve(_serving_app, host="0.0.0.0", port=args.port, threads=8)
+            logger.info(f"Starting Waitress server on port {args.port} (app={'full' if _serving_app is flask_app else 'dynamic-dispatcher'})")
+            _serve(_wsgi_target, host="0.0.0.0", port=args.port, threads=8)
         except ImportError:
             logger.warning("waitress not available, falling back to Flask dev server")
             # Patch stdout/stderr before .run() to prevent click.echo crash
