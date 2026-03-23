@@ -437,3 +437,35 @@ class TestThinkingTraces:
             total += len(traces)
             assert len(traces) == 30
         assert total == 150
+
+    def test_daemon_traces_never_leak_into_user_drain(self):
+        """Daemon traces (request_id='daemon_*' or 'unknown') must not appear in user drain."""
+        self._reset_traces()
+        from routes.hartos_backend_adapter import _capture_thinking, drain_thinking_traces
+        # Daemon traces
+        _capture_thinking({'priority': 49, 'action': 'Thinking', 'request_id': 'daemon_goal123', 'text': 'daemon work'})
+        _capture_thinking({'priority': 49, 'action': 'Thinking', 'request_id': 'unknown', 'text': 'orphan'})
+        # User trace
+        _capture_thinking({'priority': 49, 'action': 'Thinking', 'request_id': 'user-req-abc', 'text': 'user thought'})
+
+        # Drain by specific user request_id — should get only user's trace
+        user_traces = drain_thinking_traces('user-req-abc')
+        assert len(user_traces) == 1
+        assert user_traces[0]['text'] == 'user thought'
+
+        # Drain with no matching request_id — should get empty (not daemon traces)
+        leftover = drain_thinking_traces('nonexistent-req')
+        assert len(leftover) == 0
+
+    def test_daemon_traces_excluded_from_fallback_drain(self):
+        """Fallback drain (no request_id) skips daemon_ and unknown traces."""
+        self._reset_traces()
+        from routes.hartos_backend_adapter import _capture_thinking, drain_thinking_traces
+        _capture_thinking({'priority': 49, 'action': 'Thinking', 'request_id': 'daemon_goal456', 'text': 'bg'})
+        _capture_thinking({'priority': 49, 'action': 'Thinking', 'request_id': 'unknown', 'text': 'orphan'})
+        _capture_thinking({'priority': 49, 'action': 'Thinking', 'request_id': 'user-xyz', 'text': 'user'})
+
+        # Fallback drain (None) should return only user traces
+        all_traces = drain_thinking_traces(None)
+        assert len(all_traces) == 1
+        assert all_traces[0]['text'] == 'user'

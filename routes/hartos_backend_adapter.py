@@ -100,17 +100,31 @@ def _capture_thinking(message):
 
 
 def drain_thinking_traces(request_id=None):
-    """Drain thinking traces for a specific request. Falls back to all if no ID."""
+    """Drain thinking traces for a specific request.
+
+    Returns only traces matching the given request_id. Daemon traces
+    (request_id starting with 'daemon_' or 'unknown') are never returned
+    to user-facing callers — they belong to background agent tasks.
+    """
     with _thinking_traces_lock:
         if request_id and request_id in _thinking_traces_by_request:
-            traces = _thinking_traces_by_request.pop(request_id)
-            return traces
-        # Fallback: drain all (backward compat for callers without request_id)
-        all_traces = []
-        for traces in _thinking_traces_by_request.values():
-            all_traces.extend(traces)
-        _thinking_traces_by_request.clear()
-        return all_traces
+            return _thinking_traces_by_request.pop(request_id)
+        if request_id:
+            # Specific request_id not found — return empty, don't drain daemon traces
+            return []
+        # No request_id: drain only non-daemon traces (backward compat)
+        user_traces = []
+        daemon_keys = []
+        for req_id, traces in _thinking_traces_by_request.items():
+            if req_id == 'unknown' or str(req_id).startswith('daemon_'):
+                daemon_keys.append(req_id)
+            else:
+                user_traces.extend(traces)
+        # Remove drained user traces, keep daemon traces
+        for key in list(_thinking_traces_by_request.keys()):
+            if key not in daemon_keys:
+                del _thinking_traces_by_request[key]
+        return user_traces
 
 
 # ── Non-blocking HARTOS import — starts immediately, doesn't block main.py ──
