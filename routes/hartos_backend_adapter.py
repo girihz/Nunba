@@ -68,31 +68,49 @@ _HTTP_FAIL_COOLDOWN = 60  # Seconds before retrying after circuit breaker opens
 # We monkey-patch publish_async in all 3 modules so thinking traces are
 # captured into a thread-safe deque, then drained into the HTTP response.
 import threading as _threading
-from collections import deque as _deque
+from collections import deque as _deque, OrderedDict as _OrderedDict
 
-_thinking_traces = _deque(maxlen=200)  # Thread-safe bounded buffer
+# Per-request thinking traces — isolated by request_id to prevent daemon
+# traces from leaking into user chat responses.
+# OrderedDict preserves insertion order so FIFO eviction works correctly
+# (request_ids are UUIDs — alphabetical sort ≠ chronological order).
+_thinking_traces_by_request = _OrderedDict()  # {request_id: [traces]}
+_thinking_traces_lock = __import__('threading').Lock()
 
 
 def _capture_thinking(message):
-    """Capture priority-49 thinking messages into the trace buffer."""
+    """Capture priority-49 thinking messages into per-request trace buffer."""
     try:
         import json as _json
         msg = message if isinstance(message, dict) else _json.loads(message)
         if isinstance(msg, dict) and msg.get('priority') == 49 and msg.get('action') == 'Thinking':
-            _thinking_traces.append(msg)
+            req_id = msg.get('request_id') or msg.get('request_Id') or 'unknown'
+            with _thinking_traces_lock:
+                if req_id not in _thinking_traces_by_request:
+                    _thinking_traces_by_request[req_id] = []
+                _thinking_traces_by_request[req_id].append(msg)
+                # Cap per-request to 50 traces
+                if len(_thinking_traces_by_request[req_id]) > 50:
+                    _thinking_traces_by_request[req_id] = _thinking_traces_by_request[req_id][-50:]
+                # Evict oldest request (FIFO via OrderedDict insertion order)
+                if len(_thinking_traces_by_request) > 20:
+                    _thinking_traces_by_request.popitem(last=False)
     except Exception:
         pass
 
 
-def drain_thinking_traces():
-    """Drain and return all accumulated thinking traces since last drain."""
-    traces = []
-    while _thinking_traces:
-        try:
-            traces.append(_thinking_traces.popleft())
-        except IndexError:
-            break
-    return traces
+def drain_thinking_traces(request_id=None):
+    """Drain thinking traces for a specific request. Falls back to all if no ID."""
+    with _thinking_traces_lock:
+        if request_id and request_id in _thinking_traces_by_request:
+            traces = _thinking_traces_by_request.pop(request_id)
+            return traces
+        # Fallback: drain all (backward compat for callers without request_id)
+        all_traces = []
+        for traces in _thinking_traces_by_request.values():
+            all_traces.extend(traces)
+        _thinking_traces_by_request.clear()
+        return all_traces
 
 
 # ── Non-blocking HARTOS import — starts immediately, doesn't block main.py ──
