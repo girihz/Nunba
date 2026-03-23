@@ -11,6 +11,11 @@ Usage:
 import sys
 import os
 import glob
+
+# cx_Freeze traces deep dependency chains (langchain, autogen, etc.) that
+# can exceed Python's default 1000-frame recursion limit during compilation.
+sys.setrecursionlimit(5000)
+
 from cx_Freeze import setup, Executable
 
 # Ensure we're on macOS
