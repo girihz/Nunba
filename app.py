@@ -152,9 +152,16 @@ if getattr(sys, 'frozen', False):
             return True
     # Always replace — broken fd might pass write test but fail later
     # Write to a debug log file for frozen builds
-    _frozen_log_dir = os.path.join(os.path.expanduser('~'), 'Library', 'Application Support', 'Nunba', 'logs')
+    import atexit as _atexit
+    if sys.platform == 'darwin':
+        _frozen_log_dir = os.path.join(os.path.expanduser('~'), 'Library', 'Application Support', 'Nunba', 'logs')
+    elif sys.platform == 'win32':
+        _frozen_log_dir = os.path.join(os.path.expanduser('~'), 'Documents', 'Nunba', 'logs')
+    else:
+        _frozen_log_dir = os.path.join(os.path.expanduser('~'), '.config', 'nunba', 'logs')
     os.makedirs(_frozen_log_dir, exist_ok=True)
     _frozen_log = open(os.path.join(_frozen_log_dir, 'frozen_debug.log'), 'w', encoding='utf-8')
+    _atexit.register(_frozen_log.close)
     sys.stdout = _frozen_log
     sys.stderr = _frozen_log
 
