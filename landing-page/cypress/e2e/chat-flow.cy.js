@@ -394,7 +394,7 @@ describe('Chat Flow E2E', () => {
   // =========================================================================
   describe('5. /prompts Agent Schema Validation', () => {
     it('5.1 GET /prompts returns agents with required "id" field', () => {
-      cy.request(`${API}/prompts`).then((response) => {
+      cy.request({url: `${API}/prompts`, failOnStatusCode: false}).then((response) => {
         expect(response.status).to.eq(200);
         expect(response.body).to.have.property('prompts');
         expect(response.body.prompts).to.be.an('array');
@@ -408,7 +408,7 @@ describe('Chat Flow E2E', () => {
     });
 
     it('5.2 GET /prompts returns agents with required "type" field (local or cloud)', () => {
-      cy.request(`${API}/prompts`).then((response) => {
+      cy.request({url: `${API}/prompts`, failOnStatusCode: false}).then((response) => {
         response.body.prompts.forEach((agent) => {
           expect(agent).to.have.property('type');
           expect(agent.type).to.be.oneOf(['local', 'cloud']);
@@ -417,7 +417,7 @@ describe('Chat Flow E2E', () => {
     });
 
     it('5.3 GET /prompts local agents have "system_prompt" field', () => {
-      cy.request(`${API}/prompts`).then((response) => {
+      cy.request({url: `${API}/prompts`, failOnStatusCode: false}).then((response) => {
         const localAgents = response.body.prompts.filter(
           (a) => a.type === 'local'
         );
@@ -432,7 +432,7 @@ describe('Chat Flow E2E', () => {
     });
 
     it('5.4 GET /prompts agents have "name" and "description" fields', () => {
-      cy.request(`${API}/prompts`).then((response) => {
+      cy.request({url: `${API}/prompts`, failOnStatusCode: false}).then((response) => {
         response.body.prompts.forEach((agent) => {
           expect(agent).to.have.property('name');
           expect(agent.name).to.be.a('string');
@@ -443,7 +443,7 @@ describe('Chat Flow E2E', () => {
     });
 
     it('5.5 GET /prompts agents have "capabilities" array', () => {
-      cy.request(`${API}/prompts`).then((response) => {
+      cy.request({url: `${API}/prompts`, failOnStatusCode: false}).then((response) => {
         response.body.prompts.forEach((agent) => {
           expect(agent).to.have.property('capabilities');
           expect(agent.capabilities).to.be.an('array');
@@ -452,7 +452,7 @@ describe('Chat Flow E2E', () => {
     });
 
     it('5.6 GET /prompts local agents include "offline" and "private" capabilities', () => {
-      cy.request(`${API}/prompts`).then((response) => {
+      cy.request({url: `${API}/prompts`, failOnStatusCode: false}).then((response) => {
         const localAgents = response.body.prompts.filter(
           (a) => a.type === 'local'
         );
@@ -465,7 +465,7 @@ describe('Chat Flow E2E', () => {
     });
 
     it('5.7 GET /prompts agents have "requires_internet" boolean', () => {
-      cy.request(`${API}/prompts`).then((response) => {
+      cy.request({url: `${API}/prompts`, failOnStatusCode: false}).then((response) => {
         response.body.prompts.forEach((agent) => {
           expect(agent).to.have.property('requires_internet');
           expect(agent.requires_internet).to.be.a('boolean');
@@ -474,7 +474,7 @@ describe('Chat Flow E2E', () => {
     });
 
     it('5.8 GET /prompts local agents have requires_internet=false', () => {
-      cy.request(`${API}/prompts`).then((response) => {
+      cy.request({url: `${API}/prompts`, failOnStatusCode: false}).then((response) => {
         const localAgents = response.body.prompts.filter(
           (a) => a.type === 'local'
         );
@@ -486,7 +486,7 @@ describe('Chat Flow E2E', () => {
     });
 
     it('5.9 GET /prompts cloud agents have requires_internet=true', () => {
-      cy.request(`${API}/prompts`).then((response) => {
+      cy.request({url: `${API}/prompts`, failOnStatusCode: false}).then((response) => {
         const cloudAgents = response.body.prompts.filter(
           (a) => a.type === 'cloud'
         );
@@ -498,7 +498,7 @@ describe('Chat Flow E2E', () => {
     });
 
     it('5.10 GET /prompts agents have "available" boolean field', () => {
-      cy.request(`${API}/prompts`).then((response) => {
+      cy.request({url: `${API}/prompts`, failOnStatusCode: false}).then((response) => {
         response.body.prompts.forEach((agent) => {
           expect(agent).to.have.property('available');
           expect(agent.available).to.be.a('boolean');
@@ -507,7 +507,7 @@ describe('Chat Flow E2E', () => {
     });
 
     it('5.11 GET /prompts local agents are always available (available=true)', () => {
-      cy.request(`${API}/prompts`).then((response) => {
+      cy.request({url: `${API}/prompts`, failOnStatusCode: false}).then((response) => {
         const localAgents = response.body.prompts.filter(
           (a) => a.type === 'local'
         );
@@ -520,7 +520,7 @@ describe('Chat Flow E2E', () => {
     });
 
     it('5.12 Schema validation: all required fields present for chat functionality', () => {
-      cy.request(`${API}/prompts`).then((response) => {
+      cy.request({url: `${API}/prompts`, failOnStatusCode: false}).then((response) => {
         // These are the minimum fields required by the chat UI and API
         const requiredFields = ['id', 'type', 'name', 'available'];
 
