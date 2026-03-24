@@ -75,7 +75,7 @@ from collections import deque as _deque, OrderedDict as _OrderedDict
 # OrderedDict preserves insertion order so FIFO eviction works correctly
 # (request_ids are UUIDs — alphabetical sort ≠ chronological order).
 _thinking_traces_by_request = _OrderedDict()  # {request_id: [traces]}
-_thinking_traces_lock = __import__('threading').Lock()
+_thinking_traces_lock = _threading.Lock()
 
 
 def _capture_thinking(message):
