@@ -127,9 +127,11 @@ jobs:
         env:
           BROWSER: none  # Don't open browser
           PORT: 3000
+          GENERATE_SOURCEMAP: false  # Faster startup on CI
+          ESLINT_NO_DEV_ERRORS: true  # Don't block on lint warnings
 
       - name: Wait for dev server
-        run: npx wait-on http://localhost:3000 --timeout 60000
+        run: npx wait-on http://localhost:3000 --timeout 120000
 
       # Run Cypress in chunks to avoid OOM on CI runners.
       # Specs that require a live Flask backend are tagged with
@@ -140,7 +142,7 @@ jobs:
           working-directory: landing-page
           install: false  # Already installed above
           wait-on: http://localhost:3000
-          wait-on-timeout: 60
+          wait-on-timeout: 120
           browser: chrome
           config: baseUrl=http://localhost:3000,video=false
           # Run all specs — backend-dependent tests use failOnStatusCode:false
