@@ -5311,16 +5311,31 @@ def main():
                         logger.info(f"[BACKGROUND] Mount check #{attempt + 1}: {state}")
 
                         if state == 'mounted':
-                            # React is up — force compositor repaint and done
+                            # React is up but CSS transitions (opacity, blur) may not
+                            # have fired — WebView2 suspends CSS animations while hidden.
+                            # Force all transition-dependent elements to their final state.
                             try:
                                 _window.evaluate_js(
-                                    "document.body.style.display='none';"
-                                    "void document.body.offsetHeight;"
-                                    "document.body.style.display='';"
+                                    "(function(){"
+                                    "  var hero = document.getElementById('hero-section');"
+                                    "  if (hero) {"
+                                    "    hero.style.transition = 'none';"
+                                    "    hero.style.opacity = '1';"
+                                    "    hero.style.filter = 'none';"
+                                    "  }"
+                                    "  document.querySelectorAll('[style*=\"opacity: 0\"]').forEach(function(el){"
+                                    "    el.style.transition = 'none';"
+                                    "    el.style.opacity = '1';"
+                                    "    el.style.filter = 'none';"
+                                    "  });"
+                                    "  document.body.style.display = 'none';"
+                                    "  void document.body.offsetHeight;"
+                                    "  document.body.style.display = '';"
+                                    "})()"
                                 )
                             except Exception:
                                 pass
-                            logger.info("[BACKGROUND] React mounted — repaint forced")
+                            logger.info("[BACKGROUND] React mounted — transitions forced, repaint done")
                             return
 
                         # state is 'empty', 'no_root', or None — React didn't mount.
