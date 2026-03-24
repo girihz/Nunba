@@ -11,6 +11,13 @@ Run:
 
 Requires: PIL (Pillow)
 """
+import platform
+import sys
+
+if platform.system() != "Windows":
+    import pytest
+    pytest.skip("Windows-only test (uses Win32 API)", allow_module_level=True)
+
 import ctypes
 import ctypes.wintypes
 import os

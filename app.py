@@ -151,8 +151,19 @@ if getattr(sys, 'frozen', False):
         except Exception:
             return True
     # Always replace — broken fd might pass write test but fail later
-    sys.stdout = _safe_devnull()
-    sys.stderr = _safe_devnull()
+    # Write to a debug log file for frozen builds
+    import atexit as _atexit
+    if sys.platform == 'darwin':
+        _frozen_log_dir = os.path.join(os.path.expanduser('~'), 'Library', 'Application Support', 'Nunba', 'logs')
+    elif sys.platform == 'win32':
+        _frozen_log_dir = os.path.join(os.path.expanduser('~'), 'Documents', 'Nunba', 'logs')
+    else:
+        _frozen_log_dir = os.path.join(os.path.expanduser('~'), '.config', 'nunba', 'logs')
+    os.makedirs(_frozen_log_dir, exist_ok=True)
+    _frozen_log = open(os.path.join(_frozen_log_dir, 'frozen_debug.log'), 'w', encoding='utf-8')
+    _atexit.register(_frozen_log.close)
+    sys.stdout = _frozen_log
+    sys.stderr = _frozen_log
 
 import os
 import sys
@@ -401,6 +412,23 @@ if getattr(sys, 'frozen', False):
     except Exception:
         pass
 
+# -- macOS-safe tkinter event pump --
+# On macOS, root.update() enters the Cocoa run loop and never returns when
+# after() timers keep scheduling new events (every 30ms). This helper
+# processes events one-at-a-time with a time budget so it always returns.
+def _safe_tk_update(root, budget_ms=50):
+    """Pump tkinter events without getting stuck on macOS."""
+    if sys.platform != 'darwin':
+        root.update()
+        return
+    import time as _t
+    import _tkinter
+    deadline = _t.monotonic() + budget_ms / 1000.0
+    while _t.monotonic() < deadline:
+        if not root.tk.dooneevent(_tkinter.DONT_WAIT):
+            break  # no more pending events
+
+
 # ── Deferred startup config ──
 # LLM config, AI key vault, and hardware tier detection are DEFERRED until after
 # the splash screen is visible. These involve disk I/O (config reads), crypto
@@ -487,6 +515,17 @@ try:
     _ct_dpi.windll.shcore.SetProcessDpiAwareness(1)  # PROCESS_SYSTEM_DPI_AWARE
 except Exception:
     pass  # Linux/macOS or older Windows — no-op
+# cx_Freeze puts tcl/tk in Contents/MacOS/share/ but tkinter looks in
+# Contents/Resources/share/.  Set env vars so every Tk() call finds init.tcl.
+if getattr(sys, 'frozen', False) and sys.platform == 'darwin':
+    _macos_dir = os.path.dirname(sys.executable)
+    _tcl_dir = os.path.join(_macos_dir, 'share', 'tcl8.6')
+    _tk_dir = os.path.join(_macos_dir, 'share', 'tk8.6')
+    if os.path.isdir(_tcl_dir):
+        os.environ['TCL_LIBRARY'] = _tcl_dir
+    if os.path.isdir(_tk_dir):
+        os.environ['TK_LIBRARY'] = _tk_dir
+
 # Early splash only in frozen builds — two Tk() instances cause ghost white window
 if getattr(sys, 'frozen', False) and '--validate' not in sys.argv and '--install-ai' not in sys.argv and '--background' not in sys.argv and '--help' not in sys.argv and '-h' not in sys.argv:
     try:
@@ -554,7 +593,7 @@ if getattr(sys, 'frozen', False) and '--validate' not in sys.argv and '--install
                     pass
 
             _es_animate()
-            _eroot.update()  # must be update() not update_idletasks() — processes DPI events
+            _safe_tk_update(_eroot)  # use safe pump — plain update() freezes macOS Cocoa loop
             # Self-destruct: if splash is still alive after 5 min, something hung — kill it
             _eroot.after(300000, lambda: _eroot.destroy())
             # Store: (hidden_root, toplevel, canvas, status_var, photo_ref)
@@ -590,7 +629,7 @@ def _pump_early_splash(msg=None):
         try:
             if msg:
                 _early_splash[3].set(msg)
-            _early_splash[1].update()  # Toplevel — dark, safe
+            _safe_tk_update(_early_splash[1])  # safe pump — plain update() freezes macOS
         except Exception:
             pass
 
@@ -3593,30 +3632,24 @@ def setup_connectivity_monitor(window, port):
     window.events.loaded += on_page_loaded
 
 
+def _dynamic_wsgi_app(environ, start_response):
+    """WSGI dispatcher that routes to flask_app (full) when available, else gui_app."""
+    app = flask_app if flask_app is not None else gui_app
+    return app(environ, start_response)
+
+
 def start_flask():
     """Start the Flask server in a separate thread.
 
-    If main.py hasn't finished importing yet (flask_app is None), starts
-    with the lightweight gui_app first so the webview can load the React
-    SPA immediately. A background thread waits for flask_app and restarts
-    Waitress with the full app when ready.
+    Uses a dynamic WSGI dispatcher so that once main.py finishes importing
+    and sets flask_app, all new requests are automatically routed to the
+    full Flask app — no server restart needed.
     """
     global flask_app
     _serving_app = flask_app
     if _serving_app is None:
-        logger.info("flask_app not ready yet — serving lightweight gui_app first")
+        logger.info("flask_app not ready yet — serving dynamic dispatcher (gui_app until main.py loads)")
         _serving_app = gui_app
-
-        # Background hot-swap: wait for main.py import, then reload webview
-        def _hot_swap():
-            for _ in range(300):  # wait up to 5 min
-                time.sleep(1)
-                if flask_app is not None:
-                    logger.info("[HOT-SWAP] main.py ready — webview will use full app on next reload")
-                    return
-            logger.warning("[HOT-SWAP] main.py never loaded after 5 min")
-
-        threading.Thread(target=_hot_swap, daemon=True, name='flask-hot-swap').start()
     try:
         # Add CORS preflight handler for all routes
         # Use _serving_app (gui_app when flask_app is None, flask_app when ready)
@@ -4494,12 +4527,14 @@ def start_flask():
             })
 
         # Start the Flask application via waitress (production WSGI)
-        # Use _serving_app — may be gui_app (lightweight) or flask_app (full)
+        # Use _dynamic_wsgi_app when flask_app isn't ready yet — it will
+        # automatically route to flask_app once main.py import completes.
+        _wsgi_target = _serving_app if _serving_app is flask_app else _dynamic_wsgi_app
         # Lazy import — avoids crash if waitress wasn't bundled in frozen exe
         try:
             from waitress import serve as _serve
-            logger.info(f"Starting Waitress server on port {args.port} (app={'full' if _serving_app is flask_app else 'lightweight'})")
-            _serve(_serving_app, host="0.0.0.0", port=args.port, threads=8)
+            logger.info(f"Starting Waitress server on port {args.port} (app={'full' if _serving_app is flask_app else 'dynamic-dispatcher'})")
+            _serve(_wsgi_target, host="0.0.0.0", port=args.port, threads=8)
         except ImportError:
             logger.warning("waitress not available, falling back to Flask dev server")
             # Patch stdout/stderr before .run() to prevent click.echo crash
@@ -5106,7 +5141,7 @@ def main():
         # Keep splash responsive while waiting
         try:
             if _splash_root:
-                _splash_root.update()  # update() not update_idletasks() — processes paint+timer events
+                _safe_tk_update(_splash_root)
         except Exception:
             pass
         time.sleep(0.5)
@@ -5961,7 +5996,7 @@ def _show_splash():
             logger.warning(traceback.format_exc())
 
         logger.info("[SPLASH] Calling root.update()...")
-        root.update()  # process paint + timer events so animation renders
+        _safe_tk_update(root)
         logger.info("[SPLASH] Splash screen visible")
 
         def close_splash():
@@ -6040,7 +6075,7 @@ if __name__ == "__main__":
         try:
             if _splash_root and _splash_status:
                 _splash_status.set(msg)
-                _splash_root.update()  # update() not update_idletasks() — keeps animation alive
+                _safe_tk_update(_splash_root)
         except Exception:
             pass
 
@@ -6104,7 +6139,7 @@ if __name__ == "__main__":
         while _import_thread.is_alive() and time.time() < _import_timeout:
             try:
                 if _splash_root:
-                    _splash_root.update()
+                    _safe_tk_update(_splash_root)
             except Exception:
                 pass
             time.sleep(0.03)
