@@ -151,19 +151,22 @@ if getattr(sys, 'frozen', False):
         except Exception:
             return True
     # Always replace — broken fd might pass write test but fail later
-    # Write to a debug log file for frozen builds
+    # Write to a debug log file for frozen builds.
+    # Use the same log directory as the rest of Nunba (~/Documents/Nunba/logs on all platforms).
     import atexit as _atexit
-    if sys.platform == 'darwin':
-        _frozen_log_dir = os.path.join(os.path.expanduser('~'), 'Library', 'Application Support', 'Nunba', 'logs')
-    elif sys.platform == 'win32':
+    try:
+        from core.platform_paths import get_log_dir
+        _frozen_log_dir = get_log_dir()
+    except ImportError:
         _frozen_log_dir = os.path.join(os.path.expanduser('~'), 'Documents', 'Nunba', 'logs')
-    else:
-        _frozen_log_dir = os.path.join(os.path.expanduser('~'), '.config', 'nunba', 'logs')
     os.makedirs(_frozen_log_dir, exist_ok=True)
-    _frozen_log = open(os.path.join(_frozen_log_dir, 'frozen_debug.log'), 'w', encoding='utf-8')
-    _atexit.register(_frozen_log.close)
-    sys.stdout = _frozen_log
-    sys.stderr = _frozen_log
+    try:
+        _frozen_log = open(os.path.join(_frozen_log_dir, 'frozen_debug.log'), 'w', encoding='utf-8')
+        _atexit.register(_frozen_log.close)
+        sys.stdout = _frozen_log
+        sys.stderr = _frozen_log
+    except OSError:
+        pass  # If log dir is read-only, skip — don't crash on startup
 
 import os
 import sys
@@ -417,16 +420,26 @@ if getattr(sys, 'frozen', False):
 # after() timers keep scheduling new events (every 30ms). This helper
 # processes events one-at-a-time with a time budget so it always returns.
 def _safe_tk_update(root, budget_ms=50):
-    """Pump tkinter events without getting stuck on macOS."""
-    if sys.platform != 'darwin':
-        root.update()
-        return
-    import time as _t
-    import _tkinter
-    deadline = _t.monotonic() + budget_ms / 1000.0
-    while _t.monotonic() < deadline:
-        if not root.tk.dooneevent(_tkinter.DONT_WAIT):
-            break  # no more pending events
+    """Pump tkinter events without getting stuck on macOS.
+
+    On macOS, root.update() enters the Cocoa run loop and never returns when
+    after() timers keep scheduling new events. This helper processes events
+    one-at-a-time with a time budget so it always returns.
+    Guards against TclError when root is already destroyed (e.g. splash closed
+    while a timer callback is still pending).
+    """
+    try:
+        if sys.platform != 'darwin':
+            root.update()
+            return
+        import time as _t
+        import _tkinter
+        deadline = _t.monotonic() + budget_ms / 1000.0
+        while _t.monotonic() < deadline:
+            if not root.tk.dooneevent(_tkinter.DONT_WAIT):
+                break  # no more pending events
+    except Exception:
+        pass  # Root destroyed or tk unavailable — silently skip
 
 
 # ── Deferred startup config ──

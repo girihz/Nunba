@@ -987,7 +987,7 @@ def build_macos(python_exe, app_only=False, installer_only=False):
         # load.  Thinning both the launcher and libPython forces arm64.
         import platform as _plat
         import tempfile
-        if _plat.machine() == 'arm64':
+        if _plat.machine() == 'arm64' and shutil.which('lipo'):
             _python_lib = os.path.join(app_path, 'Contents', 'MacOS', 'lib', 'Python')
             for _bin in [exe_path, _python_lib]:
                 if not os.path.exists(_bin):
