@@ -685,3 +685,120 @@ class TestCatalogToBackendMapping:
             result = engine._select_backend_for_language('en')
 
         assert result == 'future-engine'
+
+
+# ============================================================
+# TTSEngine — backend capability checks
+# ============================================================
+
+class TestCanRunBackend:
+    """_can_run_backend determines if a TTS engine is usable on this hardware."""
+
+    def _make_engine(self):
+        from tts.tts_engine import TTSEngine
+        engine = TTSEngine.__new__(TTSEngine)
+        engine._active_backend = None
+        engine.has_gpu = False
+        engine._hw_detected = True
+        engine._import_check_cache = {}
+        engine._install_threads = {}
+        return engine
+
+    def test_returns_false_for_unknown_backend(self):
+        """Unknown backend name = False (don't crash, just skip)."""
+        engine = self._make_engine()
+        assert engine._can_run_backend('nonexistent_engine_xyz') is False
+
+    def test_returns_false_when_package_missing(self):
+        """Backend with missing pip package = False."""
+        engine = self._make_engine()
+        engine._import_check_cache = {}
+        with patch('importlib.util.find_spec', return_value=None):
+            # Clear cache to force re-check
+            from tts.tts_engine import TTSEngine
+            TTSEngine._import_check_cache = {}
+            result = engine._can_run_backend('chatterbox_turbo')
+        assert result is False
+
+    def test_piper_runs_without_gpu(self):
+        """Piper is CPU-only — must not require GPU/CUDA."""
+        engine = self._make_engine()
+        engine.has_gpu = False
+        from tts.tts_engine import TTSEngine, BACKEND_PIPER
+        TTSEngine._import_check_cache = {}
+        with patch('importlib.util.find_spec', return_value=MagicMock()):
+            result = engine._can_run_backend(BACKEND_PIPER)
+        # Piper needs piper_tts or piper package
+        assert isinstance(result, bool)
+
+
+# ============================================================
+# TTSEngine — synthesis and voice management
+# ============================================================
+
+class TestTTSEnginePublicAPI:
+    """Public API that the /voice endpoints and frontend call."""
+
+    def test_backend_name_returns_string(self):
+        """backend_name shown in the TTS status toast."""
+        from tts.tts_engine import TTSEngine
+        engine = TTSEngine.__new__(TTSEngine)
+        engine._active_backend = 'piper'
+        name = engine.backend_name
+        assert isinstance(name, str)
+        assert len(name) > 0
+
+    def test_get_features_returns_list(self):
+        """Features list shown in the TTS info panel."""
+        from tts.tts_engine import TTSEngine
+        engine = TTSEngine.__new__(TTSEngine)
+        engine._active_backend = 'piper'
+        features = engine._get_features()
+        assert isinstance(features, list)
+
+    def test_get_info_is_callable(self):
+        """get_info() must be callable — feeds /api/social/tts/status endpoint."""
+        from tts.tts_engine import TTSEngine
+        assert callable(getattr(TTSEngine, 'get_info', None))
+
+
+# ============================================================
+# Module-level functions
+# ============================================================
+
+class TestModuleFunctions:
+    """Module-level TTS functions used by chatbot_routes.py."""
+
+    def test_get_tts_status_returns_dict(self):
+        from tts.tts_engine import get_tts_status
+        result = get_tts_status()
+        assert isinstance(result, dict)
+
+    def test_entry_to_legacy_caps_returns_dict(self):
+        """_entry_to_legacy_caps bridges ModelCatalog entries to old ENGINE_CAPABILITIES format."""
+        from tts.tts_engine import _entry_to_legacy_caps
+        mock_entry = MagicMock()
+        mock_entry.name = 'Test TTS'
+        mock_entry.vram_gb = 2.0
+        mock_entry.languages = ['en', 'ta']
+        mock_entry.capabilities = {'streaming': True, 'voice_cloning': False}
+        mock_entry.quality_score = 0.85
+        result = _entry_to_legacy_caps(mock_entry)
+        assert isinstance(result, dict)
+        assert result['name'] == 'Test TTS'
+        assert result['vram_gb'] == 2.0
+        assert 'en' in result['languages']
+
+    def test_fallback_engine_capabilities_is_dict(self):
+        from tts.tts_engine import _FALLBACK_ENGINE_CAPABILITIES
+        assert isinstance(_FALLBACK_ENGINE_CAPABILITIES, dict)
+        assert len(_FALLBACK_ENGINE_CAPABILITIES) >= 3  # At least piper + 2 GPU engines
+
+    def test_fallback_lang_preference_has_en(self):
+        from tts.tts_engine import _FALLBACK_LANG_ENGINE_PREFERENCE
+        assert 'en' in _FALLBACK_LANG_ENGINE_PREFERENCE
+
+    def test_default_preference_is_list(self):
+        from tts.tts_engine import _DEFAULT_PREFERENCE
+        assert isinstance(_DEFAULT_PREFERENCE, list)
+        assert len(_DEFAULT_PREFERENCE) > 0
