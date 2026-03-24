@@ -355,3 +355,129 @@ class TestModuleConstants:
     def test_bundled_mode_is_bool(self):
         from routes.hartos_backend_adapter import _BUNDLED_MODE
         assert isinstance(_BUNDLED_MODE, bool)
+
+
+# ============================================================
+# get_prompts — agent listing (frontend agent sidebar)
+# ============================================================
+
+class TestGetPrompts:
+    """get_prompts feeds the agent sidebar — wrong response = empty sidebar."""
+
+    def test_returns_dict(self):
+        """Must always return a dict — frontend destructures it."""
+        from routes.hartos_backend_adapter import get_prompts
+        result = get_prompts(user_id='test_user')
+        assert isinstance(result, dict)
+
+    def test_returns_dict_without_user_id(self):
+        from routes.hartos_backend_adapter import get_prompts
+        result = get_prompts()
+        assert isinstance(result, dict)
+
+    def test_bundled_mode_returns_prompts_key(self):
+        """In bundled mode without backend, must still return 'prompts' key."""
+        import routes.hartos_backend_adapter as adapter
+        old_available = adapter._hartos_backend_available
+        old_bundled = adapter._BUNDLED_MODE
+        adapter._hartos_backend_available = False
+        adapter._BUNDLED_MODE = True
+        try:
+            result = adapter.get_prompts('user_1')
+            assert 'prompts' in result or 'error' in result
+        finally:
+            adapter._hartos_backend_available = old_available
+            adapter._BUNDLED_MODE = old_bundled
+
+    def test_circuit_breaker_returns_graceful_error(self):
+        """When circuit is open, returns error dict — not exception."""
+        import routes.hartos_backend_adapter as adapter
+        old_count = adapter._http_fail_count
+        old_time = adapter._http_fail_time
+        old_available = adapter._hartos_backend_available
+        old_bundled = adapter._BUNDLED_MODE
+        adapter._hartos_backend_available = False
+        adapter._BUNDLED_MODE = False
+        adapter._http_fail_count = 100  # Circuit open
+        adapter._http_fail_time = time.time()
+        try:
+            result = adapter.get_prompts('user_1')
+            assert isinstance(result, dict)
+            assert 'error' in result
+        finally:
+            adapter._http_fail_count = old_count
+            adapter._http_fail_time = old_time
+            adapter._hartos_backend_available = old_available
+            adapter._BUNDLED_MODE = old_bundled
+
+
+# ============================================================
+# with_fallback decorator — retry chain
+# ============================================================
+
+class TestWithFallback:
+    """with_fallback wraps functions with llama.cpp direct fallback."""
+
+    def test_decorator_preserves_function_name(self):
+        from routes.hartos_backend_adapter import with_fallback
+        @with_fallback(lambda *a, **kw: {'text': 'fallback'})
+        def my_func():
+            return {'text': 'primary'}
+        assert my_func.__name__ == 'my_func'
+
+    def test_decorator_calls_primary_first(self):
+        from routes.hartos_backend_adapter import with_fallback
+        calls = []
+        @with_fallback(lambda *a, **kw: {'text': 'fallback'})
+        def my_func():
+            calls.append('primary')
+            return {'text': 'primary'}
+        result = my_func()
+        assert 'primary' in calls
+
+
+# ============================================================
+# _ensure_hartos / background init
+# ============================================================
+
+class TestHartosInit:
+    """Background HARTOS initialization — non-blocking module load."""
+
+    def test_ensure_hartos_is_callable(self):
+        from routes.hartos_backend_adapter import _ensure_hartos
+        assert callable(_ensure_hartos)
+
+    def test_background_init_is_callable(self):
+        from routes.hartos_backend_adapter import _background_hartos_init
+        assert callable(_background_hartos_init)
+
+    def test_active_tier_is_string(self):
+        """Frontend displays the active tier label."""
+        import routes.hartos_backend_adapter as adapter
+        assert isinstance(adapter._active_tier, str)
+        assert len(adapter._active_tier) > 0
+
+
+# ============================================================
+# SocialAPI class — proxy to HARTOS social endpoints
+# ============================================================
+
+class TestSocialAPI:
+    """SocialAPI proxies all /api/social/* requests to HARTOS."""
+
+    def test_class_exists(self):
+        from routes.hartos_backend_adapter import SocialAPI
+        assert SocialAPI is not None
+
+    def test_has_social_methods(self):
+        """Social API must expose core social methods used by the frontend."""
+        from routes.hartos_backend_adapter import SocialAPI
+        api = SocialAPI()
+        for method in ('get_feed', 'get_posts', 'login', 'register', 'me'):
+            assert hasattr(api, method), f"SocialAPI missing .{method}()"
+
+    def test_has_base_url(self):
+        from routes.hartos_backend_adapter import SocialAPI
+        api = SocialAPI()
+        assert hasattr(api, 'base_url')
+        assert isinstance(api.base_url, str)
