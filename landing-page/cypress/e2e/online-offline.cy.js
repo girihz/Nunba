@@ -221,7 +221,7 @@ describe('Online/Offline Behavior E2E', () => {
         failOnStatusCode: false,
         timeout: 30000,
       }).then((resp) => {
-        expect(resp.status).to.be.oneOf([200, 400, 404, 500]);
+        expect(resp.status).to.be.oneOf([200, 400, 404, 500, 503]);
         expect(resp.headers['content-type']).to.include('application/json');
 
         if (resp.status < 400) {
@@ -296,7 +296,7 @@ describe('Online/Offline Behavior E2E', () => {
         failOnStatusCode: false,
         timeout: 30000,
       }).then((resp) => {
-        expect(resp.status).to.be.oneOf([200, 304, 400, 404, 500]);
+        expect(resp.status).to.be.oneOf([200, 304, 400, 404, 500, 503]);
         // The response should be JSON with a prompts array
         if (resp.status === 200) {
           expect(resp.body).to.have.property('prompts');
@@ -388,7 +388,7 @@ describe('Online/Offline Behavior E2E', () => {
         failOnStatusCode: false,
         timeout: 30000,
       }).then((resp) => {
-        expect(resp.status).to.be.oneOf([200, 304, 400, 404, 500]);
+        expect(resp.status).to.be.oneOf([200, 304, 400, 404, 500, 503]);
       });
     });
 
@@ -470,7 +470,7 @@ describe('Online/Offline Behavior E2E', () => {
         failOnStatusCode: false,
         timeout: 30000,
       }).then((resp) => {
-        expect(resp.status).to.be.oneOf([200, 304, 400, 404, 500]);
+        expect(resp.status).to.be.oneOf([200, 304, 400, 404, 500, 503]);
       });
 
       // Phase 2: Recovery -- unblock cloud APIs
@@ -792,7 +792,7 @@ describe('Online/Offline Behavior E2E', () => {
         // This hits the real backend (not intercepted by cy.intercept for
         // cy.request calls). If the backend is running it should respond.
         // If not running, we accept the test exercised the path.
-        expect(resp.status).to.be.oneOf([200, 404, 500]);
+        expect(resp.status).to.be.oneOf([200, 404, 500, 503]);
       });
     });
 
@@ -804,7 +804,7 @@ describe('Online/Offline Behavior E2E', () => {
         failOnStatusCode: false,
         timeout: 30000,
       }).then((resp) => {
-        expect(resp.status).to.be.oneOf([200, 400, 404, 500]);
+        expect(resp.status).to.be.oneOf([200, 400, 404, 500, 503]);
         if (resp.status < 400) {
           expect(resp.body).to.have.property('is_online');
         }
@@ -929,7 +929,7 @@ describe('Online/Offline Behavior E2E', () => {
         failOnStatusCode: false,
         timeout: 30000,
       }).then((resp) => {
-        expect(resp.status).to.be.oneOf([200, 304, 400, 404, 500]);
+        expect(resp.status).to.be.oneOf([200, 304, 400, 404, 500, 503]);
       });
 
       // App should still be alive

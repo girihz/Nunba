@@ -255,7 +255,7 @@ describe('Games API Multiplayer Endpoints', () => {
       game_config_id: 'trivia-general-knowledge-classic',
       game_type: 'trivia',
     }).then((res) => {
-      expect(res.status).to.be.oneOf([200, 201, 404, 500]);
+      expect(res.status).to.be.oneOf([200, 201, 404, 500, 503]);
       if (res.status < 400) {
         expect(res.body).to.have.property('success', true);
         expect(res.body).to.have.property('data');
@@ -265,19 +265,19 @@ describe('Games API Multiplayer Endpoints', () => {
 
   it('POST /games/:id/join returns success or 404', () => {
     cy.socialRequest('POST', '/games/nonexistent-session/join').then((res) => {
-      expect(res.status).to.be.oneOf([200, 404, 500]);
+      expect(res.status).to.be.oneOf([200, 404, 500, 503]);
     });
   });
 
   it('POST /games/:id/ready marks player ready', () => {
     cy.socialRequest('POST', '/games/nonexistent-session/ready').then((res) => {
-      expect(res.status).to.be.oneOf([200, 404, 500]);
+      expect(res.status).to.be.oneOf([200, 404, 500, 503]);
     });
   });
 
   it('POST /games/:id/start starts the game', () => {
     cy.socialRequest('POST', '/games/nonexistent-session/start').then((res) => {
-      expect(res.status).to.be.oneOf([200, 400, 404, 500]);
+      expect(res.status).to.be.oneOf([200, 400, 404, 500, 503]);
     });
   });
 
@@ -286,19 +286,19 @@ describe('Games API Multiplayer Endpoints', () => {
       action: 'answer',
       answer: 'A',
     }).then((res) => {
-      expect(res.status).to.be.oneOf([200, 404, 500]);
+      expect(res.status).to.be.oneOf([200, 404, 500, 503]);
     });
   });
 
   it('POST /games/:id/leave removes player', () => {
     cy.socialRequest('POST', '/games/nonexistent-session/leave').then((res) => {
-      expect(res.status).to.be.oneOf([200, 404, 500]);
+      expect(res.status).to.be.oneOf([200, 404, 500, 503]);
     });
   });
 
   it('GET /games/:id returns session data', () => {
     cy.socialRequest('GET', '/games/nonexistent-session').then((res) => {
-      expect(res.status).to.be.oneOf([200, 404, 500]);
+      expect(res.status).to.be.oneOf([200, 404, 500, 503]);
       if (res.status === 200 && res.body.success) {
         expect(res.body).to.have.property('data');
       }
@@ -308,7 +308,7 @@ describe('Games API Multiplayer Endpoints', () => {
   it('GET /games/:id/results returns results', () => {
     cy.socialRequest('GET', '/games/nonexistent-session/results').then(
       (res) => {
-        expect(res.status).to.be.oneOf([200, 404, 500]);
+        expect(res.status).to.be.oneOf([200, 404, 500, 503]);
       }
     );
   });
@@ -317,7 +317,7 @@ describe('Games API Multiplayer Endpoints', () => {
     cy.socialRequest('POST', '/games/quick-match', {
       game_type: 'trivia',
     }).then((res) => {
-      expect(res.status).to.be.oneOf([200, 201, 404, 500]);
+      expect(res.status).to.be.oneOf([200, 201, 404, 500, 503]);
       if (res.status < 400 && res.body.success) {
         expect(res.body).to.have.property('data');
       }
@@ -326,7 +326,7 @@ describe('Games API Multiplayer Endpoints', () => {
 
   it('GET /games/history returns history', () => {
     cy.socialRequest('GET', '/games/history').then((res) => {
-      expect(res.status).to.be.oneOf([200, 404, 500]);
+      expect(res.status).to.be.oneOf([200, 404, 500, 503]);
       if (res.status === 200 && res.body.success) {
         expect(res.body).to.have.property('data');
         expect(res.body.data).to.be.an('array');

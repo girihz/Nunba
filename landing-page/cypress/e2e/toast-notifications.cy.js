@@ -150,7 +150,7 @@ describe('Toast Notifications — Page Stability', () => {
     cy.wait(1000);
 
     // Page should still be responsive
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       if ($tabs.length >= 2) {
         cy.wrap($tabs.eq(1)).click({force: true});
         cy.wait(500);

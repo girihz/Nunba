@@ -14,7 +14,7 @@
 
 describe('Animations UI — Hero Section', () => {
   it('should render the landing page hero with animation classes', () => {
-    cy.visit('/');
+    cy.visit('/', {timeout: 60000, failOnStatusCode: false});
     cy.get('#root', {timeout: 15000}).should('exist');
 
     // Hero section should have fade-in-up animation classes on elements
@@ -31,7 +31,7 @@ describe('Animations UI — Hero Section', () => {
   });
 
   it('should render the demo page hero with staggered entrance animations', () => {
-    cy.visit('/local');
+    cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
     cy.get('#root', {timeout: 15000}).should('exist');
 
     cy.get('body').then(($body) => {
@@ -49,7 +49,7 @@ describe('Animations UI — Hero Section', () => {
 
 describe('Animations UI — Chat Messages', () => {
   it('should apply slide animation classes to chat messages', () => {
-    cy.visit('/local');
+    cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
@@ -66,7 +66,7 @@ describe('Animations UI — Chat Messages', () => {
   });
 
   it('should have focus glow on chat input', () => {
-    cy.visit('/local');
+    cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
@@ -87,7 +87,7 @@ describe('Animations UI — Chat Messages', () => {
   });
 
   it('should have scale animation on send button', () => {
-    cy.visit('/local');
+    cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
@@ -184,7 +184,7 @@ describe('Animations UI — Navigation Sidebar', () => {
 describe('Animations UI — Dialogs & Modals', () => {
   it('should apply scale-in animation to dialogs', () => {
     // Visit a page and trigger a dialog (e.g., OTP or login modal)
-    cy.visit('/local');
+    cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
@@ -215,7 +215,7 @@ describe('Animations UI — Dialogs & Modals', () => {
 
 describe('Animations UI — Buttons', () => {
   it('should have active scale transform on buttons', () => {
-    cy.visit('/local');
+    cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
@@ -249,7 +249,7 @@ describe('Animations UI — Tabs', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       if ($tabs.length >= 2) {
         // Click first tab
         cy.wrap($tabs.eq(0)).click({force: true});

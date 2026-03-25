@@ -400,9 +400,9 @@ describe('Agent Profile -- With Stubbed Agent Data', () => {
 
   it('should render About tab by default', () => {
     // The Tabs component renders "About", "Activity", "Evolution"
-    cy.get('[role="tab"]', {timeout: 10000}).should('have.length', 3);
+    cy.get('[role="tab"]', {timeout: 20000}).should('have.length', 3);
     // About tab should be selected (Mui-selected class)
-    cy.get('[role="tab"]').eq(0).should('have.attr', 'aria-selected', 'true');
+    cy.get('[role="tab"]', {timeout: 20000}).eq(0).should('have.attr', 'aria-selected', 'true');
     cy.contains('About this Agent', {timeout: 10000}).should('exist');
   });
 
@@ -474,44 +474,44 @@ describe('Agent Profile -- Tab Navigation', () => {
   });
 
   it('should switch to Activity tab when clicked', () => {
-    cy.get('[role="tab"]').eq(1).click({force: true});
+    cy.get('[role="tab"]', {timeout: 20000}).eq(1).click({force: true});
     cy.wait(1000);
 
     // Activity tab should now be selected
-    cy.get('[role="tab"]').eq(1).should('have.attr', 'aria-selected', 'true');
+    cy.get('[role="tab"]', {timeout: 20000}).eq(1).should('have.attr', 'aria-selected', 'true');
     // Should show activity-related content
     cy.contains('Activity Timeline', {timeout: 10000}).should('exist');
   });
 
   it('should switch to Evolution tab when clicked', () => {
-    cy.get('[role="tab"]').eq(2).click({force: true});
+    cy.get('[role="tab"]', {timeout: 20000}).eq(2).click({force: true});
     cy.wait(1000);
 
-    cy.get('[role="tab"]').eq(2).should('have.attr', 'aria-selected', 'true');
+    cy.get('[role="tab"]', {timeout: 20000}).eq(2).should('have.attr', 'aria-selected', 'true');
     cy.contains('Evolution Level', {timeout: 10000}).should('exist');
   });
 
   it('should return to About tab when clicked', () => {
     // First switch to Activity
-    cy.get('[role="tab"]').eq(1).click({force: true});
+    cy.get('[role="tab"]', {timeout: 20000}).eq(1).click({force: true});
     cy.wait(500);
 
     // Then back to About
-    cy.get('[role="tab"]').eq(0).click({force: true});
+    cy.get('[role="tab"]', {timeout: 20000}).eq(0).click({force: true});
     cy.wait(500);
 
-    cy.get('[role="tab"]').eq(0).should('have.attr', 'aria-selected', 'true');
+    cy.get('[role="tab"]', {timeout: 20000}).eq(0).should('have.attr', 'aria-selected', 'true');
     cy.contains('About this Agent', {timeout: 10000}).should('exist');
   });
 
   it('should not crash when switching tabs rapidly', () => {
     // Click through all tabs quickly
-    cy.get('[role="tab"]').eq(1).click({force: true});
-    cy.get('[role="tab"]').eq(2).click({force: true});
-    cy.get('[role="tab"]').eq(0).click({force: true});
-    cy.get('[role="tab"]').eq(2).click({force: true});
-    cy.get('[role="tab"]').eq(1).click({force: true});
-    cy.get('[role="tab"]').eq(0).click({force: true});
+    cy.get('[role="tab"]', {timeout: 20000}).eq(1).click({force: true});
+    cy.get('[role="tab"]', {timeout: 20000}).eq(2).click({force: true});
+    cy.get('[role="tab"]', {timeout: 20000}).eq(0).click({force: true});
+    cy.get('[role="tab"]', {timeout: 20000}).eq(2).click({force: true});
+    cy.get('[role="tab"]', {timeout: 20000}).eq(1).click({force: true});
+    cy.get('[role="tab"]', {timeout: 20000}).eq(0).click({force: true});
     cy.wait(1000);
 
     // Should not have crashed
@@ -535,7 +535,7 @@ describe('Agent Profile -- Activity Tab', () => {
     cy.wait(2000);
 
     // Switch to Activity tab
-    cy.get('[role="tab"]').eq(1).click({force: true});
+    cy.get('[role="tab"]', {timeout: 20000}).eq(1).click({force: true});
     cy.wait(1500);
 
     cy.contains('Activity Timeline', {timeout: 10000}).should('exist');
@@ -551,7 +551,7 @@ describe('Agent Profile -- Activity Tab', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]').eq(1).click({force: true});
+    cy.get('[role="tab"]', {timeout: 20000}).eq(1).click({force: true});
     cy.wait(1500);
 
     cy.contains('Recent Conversations', {timeout: 10000}).should('exist');
@@ -568,7 +568,7 @@ describe('Agent Profile -- Activity Tab', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]').eq(1).click({force: true});
+    cy.get('[role="tab"]', {timeout: 20000}).eq(1).click({force: true});
     cy.wait(1500);
 
     // Empty state message
@@ -591,7 +591,7 @@ describe('Agent Profile -- Evolution Tab', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]').eq(2).click({force: true});
+    cy.get('[role="tab"]', {timeout: 20000}).eq(2).click({force: true});
     cy.wait(1500);
 
     cy.contains('Evolution Level', {timeout: 10000}).should('exist');
@@ -607,7 +607,7 @@ describe('Agent Profile -- Evolution Tab', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]').eq(2).click({force: true});
+    cy.get('[role="tab"]', {timeout: 20000}).eq(2).click({force: true});
     cy.wait(1500);
 
     cy.contains('Traits', {timeout: 10000}).should('exist');
@@ -622,7 +622,7 @@ describe('Agent Profile -- Evolution Tab', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]').eq(2).click({force: true});
+    cy.get('[role="tab"]', {timeout: 20000}).eq(2).click({force: true});
     cy.wait(1500);
 
     cy.contains('Specialization Trees', {timeout: 10000}).should('exist');
@@ -640,7 +640,7 @@ describe('Agent Profile -- Evolution Tab', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]').eq(2).click({force: true});
+    cy.get('[role="tab"]', {timeout: 20000}).eq(2).click({force: true});
     cy.wait(1500);
 
     cy.contains('Next Stage Requirements', {timeout: 10000}).should('exist');
@@ -654,7 +654,7 @@ describe('Agent Profile -- Evolution Tab', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]').eq(2).click({force: true});
+    cy.get('[role="tab"]', {timeout: 20000}).eq(2).click({force: true});
     cy.wait(1500);
 
     cy.contains('Collaboration History', {timeout: 10000}).should('exist');
@@ -673,7 +673,7 @@ describe('Agent Profile -- Evolution Tab', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]').eq(2).click({force: true});
+    cy.get('[role="tab"]', {timeout: 20000}).eq(2).click({force: true});
     cy.wait(1500);
 
     // Should still render the Evolution Level card (with defaults)

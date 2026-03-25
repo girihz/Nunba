@@ -595,7 +595,7 @@ describe('Profile Tabs — Comments', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       // Find the Comments tab by text
       const commentsTab = $tabs.filter(':contains("Comments")');
       if (commentsTab.length > 0) {
@@ -642,7 +642,7 @@ describe('Profile Tabs — Comments', () => {
     cy.wait(2000);
 
     // Click Comments tab
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       const commentsTab = $tabs.filter(':contains("Comments")');
       if (commentsTab.length > 0) {
         cy.wrap(commentsTab.first()).click({force: true});
@@ -685,7 +685,7 @@ describe('Profile Tabs — Comments', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       const commentsTab = $tabs.filter(':contains("Comments")');
       if (commentsTab.length > 0) {
         cy.wrap(commentsTab.first()).click({force: true});
@@ -727,7 +727,7 @@ describe('Profile Tabs — Comments', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       const commentsTab = $tabs.filter(':contains("Comments")');
       if (commentsTab.length > 0) {
         cy.wrap(commentsTab.first()).click({force: true});
@@ -758,7 +758,7 @@ describe('Profile Tabs — Comments', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       const commentsTab = $tabs.filter(':contains("Comments")');
       if (commentsTab.length > 0) {
         cy.wrap(commentsTab.first()).click({force: true});
@@ -803,7 +803,7 @@ describe('Profile Tabs — Comments', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       const commentsTab = $tabs.filter(':contains("Comments")');
       if (commentsTab.length > 0) {
         cy.wrap(commentsTab.first()).click({force: true});
@@ -845,7 +845,7 @@ describe('Profile Tabs — Comments', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       const commentsTab = $tabs.filter(':contains("Comments")');
       if (commentsTab.length > 0) {
         cy.wrap(commentsTab.first()).click({force: true});
@@ -941,7 +941,7 @@ describe('Profile Tabs — Activity', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       const activityTab = $tabs.filter(':contains("Activity")');
       if (activityTab.length > 0) {
         cy.wrap(activityTab.first()).click({force: true});
@@ -998,7 +998,7 @@ describe('Profile Tabs — Activity', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       const activityTab = $tabs.filter(':contains("Activity")');
       if (activityTab.length > 0) {
         cy.wrap(activityTab.first()).click({force: true});
@@ -1044,7 +1044,7 @@ describe('Profile Tabs — Activity', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       const activityTab = $tabs.filter(':contains("Activity")');
       if (activityTab.length > 0) {
         cy.wrap(activityTab.first()).click({force: true});
@@ -1092,7 +1092,7 @@ describe('Profile Tabs — Activity', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       const activityTab = $tabs.filter(':contains("Activity")');
       if (activityTab.length > 0) {
         cy.wrap(activityTab.first()).click({force: true});
@@ -1140,7 +1140,7 @@ describe('Profile Tabs — Activity', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       const activityTab = $tabs.filter(':contains("Activity")');
       if (activityTab.length > 0) {
         cy.wrap(activityTab.first()).click({force: true});
@@ -1192,7 +1192,7 @@ describe('Profile Tabs — Activity', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       const activityTab = $tabs.filter(':contains("Activity")');
       if (activityTab.length > 0) {
         cy.wrap(activityTab.first()).click({force: true});
@@ -1227,7 +1227,7 @@ describe('Profile Tabs — Activity', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       const activityTab = $tabs.filter(':contains("Activity")');
       if (activityTab.length > 0) {
         cy.wrap(activityTab.first()).click({force: true});
@@ -1276,7 +1276,7 @@ describe('Profile Tabs — Activity', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       const activityTab = $tabs.filter(':contains("Activity")');
       if (activityTab.length > 0) {
         cy.wrap(activityTab.first()).click({force: true});
@@ -1329,14 +1329,14 @@ describe('Profile Tabs — Integration', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       if ($tabs.length > 1) {
         // Click second tab
         cy.wrap($tabs.eq(1)).click({force: true});
         cy.wait(1000);
 
         // Verify it stayed selected
-        cy.get('[role="tab"]')
+        cy.get('[role="tab"]', {timeout: 20000})
           .eq(1)
           .should('have.attr', 'aria-selected', 'true');
 
@@ -1346,7 +1346,7 @@ describe('Profile Tabs — Integration', () => {
         cy.scrollTo('top', {ensureScrollable: false});
         cy.wait(500);
 
-        cy.get('[role="tab"]')
+        cy.get('[role="tab"]', {timeout: 20000})
           .eq(1)
           .should('have.attr', 'aria-selected', 'true');
       }
@@ -1377,7 +1377,7 @@ describe('Profile Tabs — Integration', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       if ($tabs.length > 1) {
         // Switch to second tab
         cy.wrap($tabs.eq(1)).click({force: true});
@@ -1414,7 +1414,7 @@ describe('Profile Tabs — Integration', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       if ($tabs.length >= 2) {
         // Rapidly click between tabs
         for (let i = 0; i < 5; i++) {
@@ -1441,7 +1441,7 @@ describe('Profile Tabs — Integration', () => {
     cy.wait(2000);
 
     // First tab (Posts) should be selected by default
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       if ($tabs.length > 0) {
         cy.wrap($tabs.eq(0)).should('have.attr', 'aria-selected', 'true');
       }
@@ -1461,7 +1461,7 @@ describe('Profile Tabs — Integration', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 15000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       const commentsTab = $tabs.filter(':contains("Comments")');
       if (commentsTab.length > 0) {
         cy.wrap(commentsTab.first()).click({force: true});

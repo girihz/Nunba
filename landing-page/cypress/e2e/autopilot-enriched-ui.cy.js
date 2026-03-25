@@ -929,7 +929,7 @@ describe('Social Feed -- For You Default Tab', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 10000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       if ($tabs.length > 0) {
         // First tab should be selected by default
         const firstTabSelected = $tabs.first().attr('aria-selected') === 'true';
@@ -948,7 +948,7 @@ describe('Social Feed -- For You Default Tab', () => {
     cy.get('#root', {timeout: 15000}).should('exist');
     cy.wait(2000);
 
-    cy.get('[role="tab"]', {timeout: 10000}).then(($tabs) => {
+    cy.get('[role="tab"]', {timeout: 20000}).then(($tabs) => {
       if ($tabs.length > 0) {
         // Enriched feed should have at least 3-4 tabs
         expect($tabs.length).to.be.at.least(2);

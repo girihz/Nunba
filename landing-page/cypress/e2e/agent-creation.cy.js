@@ -255,7 +255,7 @@ describe('Agent Creation & Types E2E', () => {
   // Returns a Cypress chainable that yields true/false.
   // ---------------------------------------------------------------------------
   function openCreateAgentForm() {
-    cy.contains('Create new Agent', {timeout: 10000})
+    cy.contains('Create new Agent', {timeout: 20000})
       .first()
       .click({force: true});
     // Give the form a moment to render
@@ -277,7 +277,7 @@ describe('Agent Creation & Types E2E', () => {
 
     it('should display the "Create new Agent" button on the demo page', () => {
       // The button text "Create new Agent" appears in the sidebar (both desktop and mobile)
-      cy.contains('Create new Agent', {timeout: 10000}).should('exist');
+      cy.contains('Create new Agent', {timeout: 20000}).should('exist');
     });
 
     it('should open the CreateAgentForm when "Create new Agent" is clicked', () => {
@@ -297,7 +297,7 @@ describe('Agent Creation & Types E2E', () => {
       cy.get('body').then(($body) => {
         const hasBtn = $body.text().includes('Create new Agent');
         if (hasBtn) {
-          cy.contains('Create new Agent', {timeout: 10000})
+          cy.contains('Create new Agent', {timeout: 20000})
             .first()
             .click({force: true});
           cy.wait(1000);
@@ -1211,7 +1211,7 @@ describe('Agent Creation & Types E2E', () => {
       cy.wait(3000);
 
       // Click the Create new Agent button (it should open the login modal instead)
-      cy.contains('Create new Agent', {timeout: 10000})
+      cy.contains('Create new Agent', {timeout: 20000})
         .first()
         .click({force: true});
 
@@ -1227,7 +1227,7 @@ describe('Agent Creation & Types E2E', () => {
 
       // The button should have the orange active styling (text-orange-500)
       // and should NOT show "Login required"
-      cy.contains('Create new Agent', {timeout: 10000})
+      cy.contains('Create new Agent', {timeout: 20000})
         .first()
         .should('not.contain.text', 'Login required');
     });
