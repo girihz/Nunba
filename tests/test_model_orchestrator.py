@@ -7,12 +7,12 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from integrations.service_tools.model_orchestrator import (
     ModelEntry,
     ModelLoader,
     ModelOrchestrator,
 )
+
 from models.orchestrator import (
     LlamaLoader,
     STTLoader,
@@ -22,7 +22,6 @@ from models.orchestrator import (
     _register_loaders,
     get_orchestrator,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

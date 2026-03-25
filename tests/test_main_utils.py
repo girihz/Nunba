@@ -150,7 +150,7 @@ class TestGetDeviceId:
     def test_reads_from_cache(self):
         with tempfile.TemporaryDirectory() as td:
             cache = os.path.join(td, 'device_id.json')
-            expected = hashlib.sha256('cached'.encode()).hexdigest()
+            expected = hashlib.sha256(b'cached').hexdigest()
             with open(cache, 'w') as f:
                 json.dump({'device_id': expected}, f)
             result = _get_device_id('cached', cache)
@@ -159,7 +159,7 @@ class TestGetDeviceId:
     def test_updates_cache_on_fingerprint_change(self):
         with tempfile.TemporaryDirectory() as td:
             cache = os.path.join(td, 'device_id.json')
-            old_id = hashlib.sha256('old'.encode()).hexdigest()
+            old_id = hashlib.sha256(b'old').hexdigest()
             with open(cache, 'w') as f:
                 json.dump({'device_id': old_id}, f)
             new_result = _get_device_id('new', cache)

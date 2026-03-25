@@ -9,12 +9,12 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from integrations.service_tools.model_catalog import (
     ModelCatalog,
     ModelEntry,
     ModelType,
 )
+
 from models.catalog import (
     BACKENDS,
     MODEL_TYPES,
@@ -24,7 +24,6 @@ from models.catalog import (
     populate_media_gen,
     populate_tts_engines,
 )
-
 
 # ===========================================================================
 # 1. RE-EXPORTS

@@ -15,6 +15,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from integrations.service_tools.model_catalog import ModelCatalog, ModelEntry, ModelType
+
 from models.catalog import get_catalog
 
 

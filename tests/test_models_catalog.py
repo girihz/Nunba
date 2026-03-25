@@ -98,6 +98,7 @@ class TestPopulateLLMPresets:
             with patch.dict('sys.modules', {'llama.llama_installer': MagicMock(MODEL_PRESETS=presets)}):
                 # Re-import to pick up the mock
                 import importlib
+
                 import models.catalog as mc
                 importlib.reload(mc)
                 added = mc.populate_llm_presets(cat)
@@ -109,6 +110,7 @@ class TestPopulateLLMPresets:
         presets = [_make_preset('My Cool Model (7B)', 'test/cool', 7000)]
         with patch.dict('sys.modules', {'llama.llama_installer': MagicMock(MODEL_PRESETS=presets)}):
             import importlib
+
             import models.catalog as mc
             importlib.reload(mc)
             mc.populate_llm_presets(cat)
@@ -120,6 +122,7 @@ class TestPopulateLLMPresets:
         presets = [_make_preset()]
         with patch.dict('sys.modules', {'llama.llama_installer': MagicMock(MODEL_PRESETS=presets)}):
             import importlib
+
             import models.catalog as mc
             importlib.reload(mc)
             mc.populate_llm_presets(cat)
@@ -131,6 +134,7 @@ class TestPopulateLLMPresets:
         presets = [_make_preset('First', 'a/b', 2000), _make_preset('Second', 'c/d', 3000)]
         with patch.dict('sys.modules', {'llama.llama_installer': MagicMock(MODEL_PRESETS=presets)}):
             import importlib
+
             import models.catalog as mc
             importlib.reload(mc)
             mc.populate_llm_presets(cat)
@@ -143,6 +147,7 @@ class TestPopulateLLMPresets:
         presets = [_make_preset('First', 'a/b', 2000), _make_preset('Second', 'c/d', 3000)]
         with patch.dict('sys.modules', {'llama.llama_installer': MagicMock(MODEL_PRESETS=presets)}):
             import importlib
+
             import models.catalog as mc
             importlib.reload(mc)
             mc.populate_llm_presets(cat)
@@ -156,6 +161,7 @@ class TestPopulateLLMPresets:
                                 mmproj_file='mmproj.gguf', mmproj_source_file='mmproj-F16.gguf')]
         with patch.dict('sys.modules', {'llama.llama_installer': MagicMock(MODEL_PRESETS=presets)}):
             import importlib
+
             import models.catalog as mc
             importlib.reload(mc)
             mc.populate_llm_presets(cat)
@@ -171,6 +177,7 @@ class TestPopulateLLMPresets:
                                 mmproj_source_file='mmproj-F16.gguf')]
         with patch.dict('sys.modules', {'llama.llama_installer': MagicMock(MODEL_PRESETS=presets)}):
             import importlib
+
             import models.catalog as mc
             importlib.reload(mc)
             mc.populate_llm_presets(cat)
@@ -183,6 +190,7 @@ class TestPopulateLLMPresets:
         presets = [_make_preset('Small', 's/s', 2048)]
         with patch.dict('sys.modules', {'llama.llama_installer': MagicMock(MODEL_PRESETS=presets)}):
             import importlib
+
             import models.catalog as mc
             importlib.reload(mc)
             mc.populate_llm_presets(cat)
@@ -194,6 +202,7 @@ class TestPopulateLLMPresets:
         presets = [_make_preset('Huge', 'h/h', 50000)]
         with patch.dict('sys.modules', {'llama.llama_installer': MagicMock(MODEL_PRESETS=presets)}):
             import importlib
+
             import models.catalog as mc
             importlib.reload(mc)
             mc.populate_llm_presets(cat)
@@ -205,6 +214,7 @@ class TestPopulateLLMPresets:
         presets = [_make_preset('Huge', 'h/h', 50000)]
         with patch.dict('sys.modules', {'llama.llama_installer': MagicMock(MODEL_PRESETS=presets)}):
             import importlib
+
             import models.catalog as mc
             importlib.reload(mc)
             mc.populate_llm_presets(cat)
@@ -225,6 +235,7 @@ class TestPopulateLLMPresets:
         presets = [_make_preset('Dupe', 'd/d', 3000)]
         with patch.dict('sys.modules', {'llama.llama_installer': MagicMock(MODEL_PRESETS=presets)}):
             import importlib
+
             import models.catalog as mc
             importlib.reload(mc)
             mc.populate_llm_presets(cat)
@@ -236,6 +247,7 @@ class TestPopulateLLMPresets:
         presets = [_make_preset('Qwen3.5 4B Instruct', 'q/4b', 4000)]
         with patch.dict('sys.modules', {'llama.llama_installer': MagicMock(MODEL_PRESETS=presets)}):
             import importlib
+
             import models.catalog as mc
             importlib.reload(mc)
             mc.populate_llm_presets(cat)
@@ -360,7 +372,8 @@ class TestGetCatalog:
         assert a is b
 
     def test_shared_with_hartos_module(self):
-        from models.catalog import get_catalog
         import integrations.service_tools.model_catalog as hartos_mod
+
+        from models.catalog import get_catalog
         cat = get_catalog()
         assert cat is hartos_mod._catalog_instance

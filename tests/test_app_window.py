@@ -133,8 +133,9 @@ class TestSafeTkUpdate:
         mock_root.update.assert_called()
 
     def test_handles_tcl_error(self):
-        from app import _safe_tk_update
         import tkinter
+
+        from app import _safe_tk_update
         mock_root = MagicMock()
         mock_root.update.side_effect = tkinter.TclError("application has been destroyed")
         # Should not raise

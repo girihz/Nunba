@@ -17,11 +17,16 @@ from unittest.mock import MagicMock, PropertyMock, call, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Import the module under test
 # ---------------------------------------------------------------------------
 from tts.tts_engine import (
+    _BACKEND_TO_CATALOG,
+    _CATALOG_TO_BACKEND,
+    _DEFAULT_PREFERENCE,
+    _FALLBACK_ENGINE_CAPABILITIES,
+    _FALLBACK_LANG_ENGINE_PREFERENCE,
+    _INDIC_LANGS,
     BACKEND_CHATTERBOX_ML,
     BACKEND_CHATTERBOX_TURBO,
     BACKEND_COSYVOICE3,
@@ -34,12 +39,6 @@ from tts.tts_engine import (
     PreSynthCache,
     SentencePipeline,
     TTSEngine,
-    _BACKEND_TO_CATALOG,
-    _CATALOG_TO_BACKEND,
-    _DEFAULT_PREFERENCE,
-    _FALLBACK_ENGINE_CAPABILITIES,
-    _FALLBACK_LANG_ENGINE_PREFERENCE,
-    _INDIC_LANGS,
     _entry_to_legacy_caps,
     _get_engine_capabilities,
     _get_lang_preference,
@@ -47,7 +46,6 @@ from tts.tts_engine import (
     get_tts_status,
     synthesize_text,
 )
-
 
 # ===========================================================================
 # 1. BACKEND CONSTANTS

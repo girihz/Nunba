@@ -20,18 +20,18 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from tts.tts_engine import (
-    BACKEND_CHATTERBOX_ML,
-    BACKEND_CHATTERBOX_TURBO,
-    BACKEND_COSYVOICE3,
-    BACKEND_F5,
-    BACKEND_INDIC_PARLER,
-    BACKEND_PIPER,
     _BACKEND_TO_CATALOG,
     _CATALOG_TO_BACKEND,
     _DEFAULT_PREFERENCE,
     _FALLBACK_ENGINE_CAPABILITIES,
     _FALLBACK_LANG_ENGINE_PREFERENCE,
     _INDIC_LANGS,
+    BACKEND_CHATTERBOX_ML,
+    BACKEND_CHATTERBOX_TURBO,
+    BACKEND_COSYVOICE3,
+    BACKEND_F5,
+    BACKEND_INDIC_PARLER,
+    BACKEND_PIPER,
 )
 
 
@@ -149,7 +149,7 @@ class TestEngineVRAM:
 
     def test_f5_moderate_vram(self):
         caps = _FALLBACK_ENGINE_CAPABILITIES[BACKEND_F5]
-        assert caps['vram_gb'] <= 4.0, f"F5-TTS should need ≤4GB VRAM"
+        assert caps['vram_gb'] <= 4.0, "F5-TTS should need ≤4GB VRAM"
 
     def test_chatterbox_turbo_vram(self):
         caps = _FALLBACK_ENGINE_CAPABILITIES[BACKEND_CHATTERBOX_TURBO]
