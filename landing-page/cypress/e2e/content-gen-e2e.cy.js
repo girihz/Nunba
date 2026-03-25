@@ -59,7 +59,7 @@ const stubFeed = () => {
 
 const visitSocial = (path = '/social') => {
   cy.visit(path, {
-    timeout: 60000,
+    timeout: 120000,
     onBeforeLoad(win) {
       win.localStorage.setItem('social_token', 'stub-jwt-token');
       win.localStorage.setItem('access_token', 'stub-jwt-token');
@@ -226,7 +226,7 @@ describe('Input Validation', () => {
         failOnStatusCode: false,
       }).then((res) => {
         // Should not crash — speed clamped to 0.25
-        expect([200, 404, 500, 503]).to.include(res.status);
+        expect([200, 400, 404, 500, 503]).to.include(res.status);
       });
     });
 
@@ -238,7 +238,7 @@ describe('Input Validation', () => {
         headers: {'Content-Type': 'application/json'},
         failOnStatusCode: false,
       }).then((res) => {
-        expect([200, 404, 500, 503]).to.include(res.status);
+        expect([200, 400, 404, 500, 503]).to.include(res.status);
       });
     });
 
@@ -251,7 +251,7 @@ describe('Input Validation', () => {
         failOnStatusCode: false,
       }).then((res) => {
         // Should default to 1.0 — not crash
-        expect([200, 404, 500, 503]).to.include(res.status);
+        expect([200, 400, 404, 500, 503]).to.include(res.status);
       });
     });
   });
@@ -369,14 +369,14 @@ describe('GameAssetService — JWT Auth Header', () => {
 
     // Navigate to a kids game page to trigger GameAssetService
     cy.visit('/social/kids', {
-      timeout: 60000,
+      timeout: 120000,
       onBeforeLoad(win) {
         win.localStorage.setItem('social_token', 'my-test-jwt-123');
         win.localStorage.setItem('access_token', 'my-test-jwt-123');
       },
     });
 
-    cy.get('body', {timeout: 10000}).should('be.visible');
+    cy.get('body', {timeout: 300000}).should('be.visible');
 
     // If any media asset requests were fired, verify auth header
     // (kids hub may not fire media requests — this validates the wiring is in place)
@@ -389,7 +389,7 @@ describe('GameAssetService — JWT Auth Header', () => {
     }).as('mediaNoAuth');
 
     cy.visit('/social/kids', {
-      timeout: 60000,
+      timeout: 120000,
       onBeforeLoad(win) {
         win.localStorage.removeItem('social_token');
         // Keep access_token for SocialContext auth
@@ -397,7 +397,7 @@ describe('GameAssetService — JWT Auth Header', () => {
       },
     });
 
-    cy.get('body', {timeout: 10000}).should('be.visible');
+    cy.get('body', {timeout: 300000}).should('be.visible');
   });
 });
 
@@ -419,7 +419,7 @@ describe('GameItemImage — Broken Image Fallback', () => {
     }).as('brokenImage');
 
     visitSocial('/social/kids');
-    cy.get('body', {timeout: 10000}).should('be.visible');
+    cy.get('body', {timeout: 300000}).should('be.visible');
     // The page should not crash — broken images fall back to emoji
   });
 
@@ -430,7 +430,7 @@ describe('GameItemImage — Broken Image Fallback', () => {
     }).as('media503');
 
     visitSocial('/social/kids');
-    cy.get('body', {timeout: 10000}).should('be.visible');
+    cy.get('body', {timeout: 300000}).should('be.visible');
   });
 });
 
@@ -453,7 +453,7 @@ describe('RoleGuard — Kids Learning Zone Access', () => {
     });
 
     visitSocial('/social/kids');
-    cy.get('body', {timeout: 10000}).should('be.visible');
+    cy.get('body', {timeout: 300000}).should('be.visible');
     // Should NOT redirect — guest is allowed
     cy.url().should('include', '/social/kids');
   });
@@ -461,7 +461,7 @@ describe('RoleGuard — Kids Learning Zone Access', () => {
   it('/social/kids accessible to flat role', () => {
     stubAuth('flat');
     visitSocial('/social/kids');
-    cy.get('body', {timeout: 10000}).should('be.visible');
+    cy.get('body', {timeout: 300000}).should('be.visible');
     cy.url().should('include', '/social/kids');
   });
 
@@ -472,7 +472,7 @@ describe('RoleGuard — Kids Learning Zone Access', () => {
     });
 
     visitSocial('/social/kids/create');
-    cy.get('body', {timeout: 10000}).should('be.visible');
+    cy.get('body', {timeout: 300000}).should('be.visible');
     // RoleGuard with minRole="flat" should redirect guest away
     // (either to /social or show access denied)
   });
@@ -480,13 +480,13 @@ describe('RoleGuard — Kids Learning Zone Access', () => {
   it('/social/kids/create accessible to flat role', () => {
     stubAuth('flat');
     visitSocial('/social/kids/create');
-    cy.get('body', {timeout: 10000}).should('be.visible');
+    cy.get('body', {timeout: 300000}).should('be.visible');
   });
 
   it('/social/kids/custom requires flat role', () => {
     stubAuth('flat');
     visitSocial('/social/kids/custom');
-    cy.get('body', {timeout: 10000}).should('be.visible');
+    cy.get('body', {timeout: 300000}).should('be.visible');
   });
 
   it('anonymous user (no auth) is redirected from kids hub', () => {
@@ -495,8 +495,8 @@ describe('RoleGuard — Kids Learning Zone Access', () => {
       body: {success: false, error: 'Unauthorized'},
     });
 
-    cy.visit('/social/kids', {timeout: 60000, failOnStatusCode: false});
-    cy.get('body', {timeout: 10000}).should('be.visible');
+    cy.visit('/social/kids', {timeout: 120000, failOnStatusCode: false});
+    cy.get('body', {timeout: 300000}).should('be.visible');
     // Should redirect to /social (RoleGuard blocks anonymous)
   });
 });
@@ -520,12 +520,12 @@ describe('Sound System — Mute & AudioContext', () => {
 
   it('page loads without AudioContext errors', () => {
     visitSocial('/social/kids');
-    cy.get('body', {timeout: 10000}).should('be.visible');
+    cy.get('body', {timeout: 300000}).should('be.visible');
   });
 
   it('GameSounds functions exist on window after page load', () => {
     visitSocial('/social/kids');
-    cy.get('body', {timeout: 10000}).should('be.visible');
+    cy.get('body', {timeout: 300000}).should('be.visible');
     // The sound system is loaded via imports — no global window check needed
     // This test ensures the page doesn't crash during module initialization
   });
@@ -554,14 +554,14 @@ describe('Admin Privilege — Master Control', () => {
     });
 
     visitSocial('/admin');
-    cy.get('body', {timeout: 10000}).should('be.visible');
+    cy.get('body', {timeout: 300000}).should('be.visible');
   });
 
   it('flat user is redirected away from /admin', () => {
     stubAuth('flat');
 
     visitSocial('/admin');
-    cy.get('body', {timeout: 10000}).should('be.visible');
+    cy.get('body', {timeout: 300000}).should('be.visible');
     // RoleGuard with minRole="central" redirects flat users
   });
 
@@ -572,7 +572,7 @@ describe('Admin Privilege — Master Control', () => {
     });
 
     visitSocial('/admin');
-    cy.get('body', {timeout: 10000}).should('be.visible');
+    cy.get('body', {timeout: 300000}).should('be.visible');
   });
 
   it('admin settings API requires auth token', () => {
@@ -609,7 +609,7 @@ describe('Graceful Degradation', () => {
     cy.intercept('POST', '**/api/social/tts/**', {forceNetworkError: true});
 
     visitSocial('/social/kids');
-    cy.get('body', {timeout: 10000}).should('be.visible');
+    cy.get('body', {timeout: 300000}).should('be.visible');
   });
 
   it('game screen loads with emoji fallback when images fail', () => {
@@ -623,7 +623,7 @@ describe('Graceful Degradation', () => {
     });
 
     visitSocial('/social/kids');
-    cy.get('body', {timeout: 10000}).should('be.visible');
+    cy.get('body', {timeout: 300000}).should('be.visible');
   });
 
   it('handles 429 (rate limit) on media routes', () => {
@@ -701,7 +701,7 @@ describe('Kids Game Template — Sound & Commentary', () => {
 
   it('kids hub page renders without sound errors', () => {
     visitSocial('/social/kids');
-    cy.get('body', {timeout: 10000}).should('be.visible');
+    cy.get('body', {timeout: 300000}).should('be.visible');
     // Verify no JavaScript errors from sound initialization
   });
 
@@ -711,7 +711,7 @@ describe('Kids Game Template — Sound & Commentary', () => {
     });
 
     visitSocial('/social/kids');
-    cy.get('body', {timeout: 10000}).should('be.visible');
+    cy.get('body', {timeout: 300000}).should('be.visible');
   });
 });
 

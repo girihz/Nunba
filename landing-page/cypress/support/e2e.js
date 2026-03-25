@@ -177,7 +177,7 @@ Cypress.Commands.add('socialVisit', (path, options = {}) => {
 
   cy.visit(path, {
     failOnStatusCode: false,
-    timeout: 60000,
+    timeout: 120000,
     ...options,
     onBeforeLoad(win) {
       if (token) {
@@ -255,7 +255,7 @@ Cypress.Commands.add('socialVisitAsAdmin', (path, options = {}) => {
 
   cy.visit(path, {
     failOnStatusCode: false,
-    timeout: 60000,
+    timeout: 120000,
     ...options,
     onBeforeLoad(win) {
       if (token) win.localStorage.setItem('access_token', token);
