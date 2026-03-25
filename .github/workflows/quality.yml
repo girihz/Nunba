@@ -182,34 +182,29 @@ jobs:
           done
           curl -sf http://localhost:5000/health || echo "Flask health check returned non-200 (may still work)"
 
-      # ── Frontend: React dev server ──
+      # ── Frontend: Build React and let Flask serve it (bundled mode) ──
       - name: Install frontend dependencies
         working-directory: landing-page
         run: npm ci --legacy-peer-deps
 
-      - name: Start React dev server
+      - name: Build React (production)
         working-directory: landing-page
-        run: npm start &
+        run: npx react-app-rewired build
         env:
-          BROWSER: none
-          PORT: 3000
-          GENERATE_SOURCEMAP: false
-          ESLINT_NO_DEV_ERRORS: true
+          CI: 'false'
+          DISABLE_ESLINT_PLUGIN: 'true'
+          NODE_OPTIONS: '--max-old-space-size=4096'
 
-      - name: Wait for React dev server
-        working-directory: landing-page
-        run: npx wait-on http://localhost:3000 --timeout 120000
-
-      # ── Cypress: Full-stack E2E ──
+      # ── Cypress: Bundled mode (Flask serves React on :5000) ──
       - name: Cypress E2E tests
         uses: cypress-io/github-action@v6
         with:
           working-directory: landing-page
           install: false
-          wait-on: http://localhost:3000
+          wait-on: http://localhost:5000
           wait-on-timeout: 120
           browser: chrome
-          config: baseUrl=http://localhost:3000,video=false
+          config: baseUrl=http://localhost:5000,video=false
           record: false
         env:
           CI: true
