@@ -226,13 +226,12 @@ def generate_requirements(output_path='requirements.txt', platform=None):
 
     All deployment modes (dev, build, CI) use this generated file.
     """
-    import os
     if platform is None:
         platform = sys.platform
 
     lines = [
         "# AUTO-GENERATED from scripts/deps.py — DO NOT EDIT MANUALLY",
-        f"# Regenerate: python scripts/deps.py requirements",
+        "# Regenerate: python scripts/deps.py requirements",
         f"# Nunba {VERSION} | Python Embed {PYTHON_EMBED_VERSION}",
         "",
     ]
@@ -241,13 +240,19 @@ def generate_requirements(output_path='requirements.txt', platform=None):
     for name, ver in CORE_DEPS.items():
         lines.append(_format_dep(name, ver))
 
-    # Platform-specific
-    plat_deps = PLATFORM_DEPS.get(platform, {})
-    if plat_deps:
-        lines.append("")
-        lines.append(f"# Platform: {platform}")
+    # Platform-specific (use PEP 508 markers so one file works everywhere)
+    _marker_map = {
+        "win32": 'sys_platform == "win32"',
+        "darwin": 'sys_platform == "darwin"',
+        "linux": 'sys_platform == "linux"',
+    }
+    lines.append("")
+    lines.append("# Platform-conditional dependencies")
+    for plat_key, plat_deps in PLATFORM_DEPS.items():
+        marker = _marker_map.get(plat_key, f'sys_platform == "{plat_key}"')
         for name, ver in plat_deps.items():
-            lines.append(_format_dep(name, ver))
+            dep_str = _format_dep(name, ver)
+            lines.append(f"{dep_str}; {marker}")
 
     with open(output_path, 'w') as f:
         f.write('\n'.join(lines) + '\n')

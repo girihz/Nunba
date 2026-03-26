@@ -18,10 +18,10 @@
  * "Every word spoken matters." — The human who built this.
  */
 
-import {API_BASE_URL} from '../../config/apiBase';
-
-import {Box, Typography, Fade, Grow, ButtonBase} from '@mui/material';
-import React, {useState, useEffect, useRef, useCallback} from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Box, Typography, Fade, Grow, ButtonBase } from '@mui/material';
+import { API_BASE_URL } from '../../config/apiBase';
+import VoiceVisualizer from '../VoiceVisualizer';
 
 // ════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -666,7 +666,7 @@ function usePreSynthVoice(language) {
     window.speechSynthesis?.cancel();
   }, []);
 
-  return {speak, stop, preSynth, warmUp};
+  return { speak, stop, preSynth, warmUp, audioRef };
 }
 
 function _webSpeech(text, lang) {
@@ -877,7 +877,16 @@ export default function LightYourHART({userId, onComplete}) {
   // Systems — particles respond to both phase AND chosen passion
   useParticles(canvasRef, phase, passionKey);
   useAmbientSound(phase);
-  const {speak, stop, preSynth, warmUp} = usePreSynthVoice(language);
+  const { speak: _rawSpeak, stop: _rawStop, preSynth, warmUp, audioRef: hartAudioRef } = usePreSynthVoice(language);
+  const [hartSpeaking, setHartSpeaking] = useState(false);
+
+  // Wrap speak/stop to toggle visualizer state
+  const speak = useCallback(async (...args) => {
+    setHartSpeaking(true);
+    try { return await _rawSpeak(...args); }
+    finally { setHartSpeaking(false); }
+  }, [_rawSpeak]);
+  const stop = useCallback(() => { _rawStop(); setHartSpeaking(false); }, [_rawStop]);
 
   // ── Phase: Darkness → Language (auto after 2s) ──
   useEffect(() => {
@@ -1149,6 +1158,11 @@ export default function LightYourHART({userId, onComplete}) {
           ref={canvasRef}
           style={{position: 'absolute', inset: 0, zIndex: 0}}
         />
+
+        {/* Voice visualizer — always alive, reacts when HART speaks */}
+        <Box sx={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 1 }}>
+          <VoiceVisualizer audioRef={hartAudioRef} isActive={hartSpeaking} size={160} />
+        </Box>
 
         {/* Reveal flash — subtle white bloom at THE moment */}
         {phase === 'reveal_name' && (

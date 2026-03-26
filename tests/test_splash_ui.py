@@ -11,15 +11,19 @@ Run:
 
 Requires: PIL (Pillow)
 """
+import platform
+import sys
+
+if platform.system() != "Windows":
+    import pytest
+    pytest.skip("Windows-only test (uses Win32 API)", allow_module_level=True)
+
 import ctypes
 import ctypes.wintypes
 import os
-import shutil
 import struct
 import subprocess
-import sys
 import time
-
 
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
@@ -100,7 +104,7 @@ def run_test(frozen_mode=False):
     if frozen_mode:
         # Patch: remove the frozen guard so early splash runs in dev
         test_file = os.path.join(app_dir, "_test_splash_app.py")
-        with open(app_file, "r", encoding="utf-8") as f:
+        with open(app_file, encoding="utf-8") as f:
             src = f.read()
         src = src.replace(
             "if getattr(sys, 'frozen', False) and '--validate'",
@@ -124,7 +128,7 @@ def run_test(frozen_mode=False):
         cwd=app_dir,
     )
 
-    print(f"Time   #wins  Lum    Status   Size")
+    print("Time   #wins  Lum    Status   Size")
     print(f"{'-' * 55}")
 
     frames = []

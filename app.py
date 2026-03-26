@@ -5,7 +5,8 @@ Creates a WebApp with reliable startup and system tray functionality + Sidebar C
 Connect to Hivemind with your friends' agents.
 """
 # app.py (VERY TOP — before any other imports)
-import os, sys
+import os
+import sys
 
 # Trace recursion in frozen builds — write to file since Win32GUI has no console
 if getattr(sys, 'frozen', False):
@@ -97,13 +98,17 @@ def _check_single_instance():
     _port = 5000
     for a in sys.argv:
         if a.startswith('--port='):
-            try: _port = int(a.split('=')[1])
-            except ValueError: pass
+            try:
+                _port = int(a.split('=')[1])
+            except ValueError:
+                pass
         if a == '--port':
             idx = sys.argv.index(a)
             if idx + 1 < len(sys.argv):
-                try: _port = int(sys.argv[idx + 1])
-                except ValueError: pass
+                try:
+                    _port = int(sys.argv[idx + 1])
+                except ValueError:
+                    pass
     import socket as _sock
     _s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
     try:
@@ -119,11 +124,13 @@ def _check_single_instance():
             pass
         print(f"Nunba is already running on port {_port}. Exiting duplicate instance.")
         sys.exit(0)
-    except (_sock.timeout, ConnectionRefusedError, OSError):
+    except (TimeoutError, ConnectionRefusedError, OSError):
         pass  # Port is free — we are the first instance
     finally:
-        try: _s.close()
-        except Exception: pass
+        try:
+            _s.close()
+        except Exception:
+            pass
 
 _check_single_instance()
 
@@ -151,8 +158,22 @@ if getattr(sys, 'frozen', False):
         except Exception:
             return True
     # Always replace — broken fd might pass write test but fail later
-    sys.stdout = _safe_devnull()
-    sys.stderr = _safe_devnull()
+    # Write to a debug log file for frozen builds.
+    # Use the same log directory as the rest of Nunba (~/Documents/Nunba/logs on all platforms).
+    import atexit as _atexit
+    try:
+        from core.platform_paths import get_log_dir
+        _frozen_log_dir = get_log_dir()
+    except ImportError:
+        _frozen_log_dir = os.path.join(os.path.expanduser('~'), 'Documents', 'Nunba', 'logs')
+    os.makedirs(_frozen_log_dir, exist_ok=True)
+    try:
+        _frozen_log = open(os.path.join(_frozen_log_dir, 'frozen_debug.log'), 'w', encoding='utf-8')
+        _atexit.register(_frozen_log.close)
+        sys.stdout = _frozen_log
+        sys.stderr = _frozen_log
+    except OSError:
+        pass  # If log dir is read-only, skip — don't crash on startup
 
 import os
 import sys
@@ -388,7 +409,7 @@ if getattr(sys, 'frozen', False):
         _tf_spec = _ilu_tf.find_spec('transformers')
         if _tf_spec and _tf_spec.origin:
             _tf_init = _tf_spec.origin
-            with open(_tf_init, 'r', encoding='utf-8') as _f:
+            with open(_tf_init, encoding='utf-8') as _f:
                 _tf_src = _f.read()
             _bad_line = 'import_structure[frozenset({})].update(_import_structure)'
             if _bad_line in _tf_src:
@@ -400,6 +421,33 @@ if getattr(sys, 'frozen', False):
                     _f.write(_fixed)
     except Exception:
         pass
+
+# -- macOS-safe tkinter event pump --
+# On macOS, root.update() enters the Cocoa run loop and never returns when
+# after() timers keep scheduling new events (every 30ms). This helper
+# processes events one-at-a-time with a time budget so it always returns.
+def _safe_tk_update(root, budget_ms=50):
+    """Pump tkinter events without getting stuck on macOS.
+
+    On macOS, root.update() enters the Cocoa run loop and never returns when
+    after() timers keep scheduling new events. This helper processes events
+    one-at-a-time with a time budget so it always returns.
+    Guards against TclError when root is already destroyed (e.g. splash closed
+    while a timer callback is still pending).
+    """
+    try:
+        if sys.platform != 'darwin':
+            root.update()
+            return
+        import _tkinter
+        import time as _t
+        deadline = _t.monotonic() + budget_ms / 1000.0
+        while _t.monotonic() < deadline:
+            if not root.tk.dooneevent(_tkinter.DONT_WAIT):
+                break  # no more pending events
+    except Exception:
+        pass  # Root destroyed or tk unavailable — silently skip
+
 
 # ── Deferred startup config ──
 # LLM config, AI key vault, and hardware tier detection are DEFERRED until after
@@ -420,7 +468,7 @@ def _load_deferred_config():
         import json as _json_llm
         _llm_cfg_path = os.path.join(os.path.expanduser('~'), '.nunba', 'llama_config.json')
         if os.path.isfile(_llm_cfg_path):
-            with open(_llm_cfg_path, 'r') as _f:
+            with open(_llm_cfg_path) as _f:
                 _llm_cfg = _json_llm.load(_f)
 
             # Set HEVOLVE_LOCAL_LLM_URL from config — single source of truth
@@ -487,6 +535,17 @@ try:
     _ct_dpi.windll.shcore.SetProcessDpiAwareness(1)  # PROCESS_SYSTEM_DPI_AWARE
 except Exception:
     pass  # Linux/macOS or older Windows — no-op
+# cx_Freeze puts tcl/tk in Contents/MacOS/share/ but tkinter looks in
+# Contents/Resources/share/.  Set env vars so every Tk() call finds init.tcl.
+if getattr(sys, 'frozen', False) and sys.platform == 'darwin':
+    _macos_dir = os.path.dirname(sys.executable)
+    _tcl_dir = os.path.join(_macos_dir, 'share', 'tcl8.6')
+    _tk_dir = os.path.join(_macos_dir, 'share', 'tk8.6')
+    if os.path.isdir(_tcl_dir):
+        os.environ['TCL_LIBRARY'] = _tcl_dir
+    if os.path.isdir(_tk_dir):
+        os.environ['TK_LIBRARY'] = _tk_dir
+
 # Early splash only in frozen builds — two Tk() instances cause ghost white window
 if getattr(sys, 'frozen', False) and '--validate' not in sys.argv and '--install-ai' not in sys.argv and '--background' not in sys.argv and '--help' not in sys.argv and '-h' not in sys.argv:
     try:
@@ -497,7 +556,8 @@ if getattr(sys, 'frozen', False) and '--validate' not in sys.argv and '--install
             sys.executable if getattr(sys, 'frozen', False) else __file__))
         _esp_path = os.path.join(_app_base, 'splash.png')
         if os.path.isfile(_esp_path):
-            from PIL import Image as _ESImg, ImageTk as _ESTk
+            from PIL import Image as _ESImg
+            from PIL import ImageTk as _ESTk
             _es_img = _ESImg.open(_esp_path)
             # Scale to match animated splash size (900x560) if larger
             _ESW, _ESH = _es_img.size
@@ -554,7 +614,7 @@ if getattr(sys, 'frozen', False) and '--validate' not in sys.argv and '--install
                     pass
 
             _es_animate()
-            _eroot.update()  # must be update() not update_idletasks() — processes DPI events
+            _safe_tk_update(_eroot)  # use safe pump — plain update() freezes macOS Cocoa loop
             # Self-destruct: if splash is still alive after 5 min, something hung — kill it
             _eroot.after(300000, lambda: _eroot.destroy())
             # Store: (hidden_root, toplevel, canvas, status_var, photo_ref)
@@ -564,23 +624,24 @@ if getattr(sys, 'frozen', False) and '--validate' not in sys.argv and '--install
     except Exception:
         _early_splash = None
 
-import threading
-import logging
 import argparse
-from flask import Flask, jsonify, request, render_template_string
-import importlib.util
-import traceback
-import json
-import time
-import ctypes
-from pathlib import Path
-import shutil
 import atexit
+import ctypes
+import importlib.util
+import json
+import logging
+import threading
+import time
+import traceback
+
 # pyperclip lazy-imported in clipboard monitor thread — clipboard API can deadlock
 # if another app holds the clipboard lock during startup
 # waitress is lazy-imported in start_flask() — no top-level import needed
 import urllib.parse
+
 import requests
+from flask import Flask, jsonify, request
+
 
 # Update early splash status after heavy imports (frozen builds only).
 # Use _early_splash[1].update() (Toplevel) NOT [0].update() (_eroot).
@@ -590,7 +651,7 @@ def _pump_early_splash(msg=None):
         try:
             if msg:
                 _early_splash[3].set(msg)
-            _early_splash[1].update()  # Toplevel — dark, safe
+            _safe_tk_update(_early_splash[1])  # safe pump — plain update() freezes macOS
         except Exception:
             pass
 
@@ -647,7 +708,7 @@ _pump_early_splash('Loading AI engine...')
 
 # Import Llama.cpp installer for first-run initialization
 try:
-    from llama.llama_config import initialize_llama_on_first_run, LlamaConfig
+    from llama.llama_config import LlamaConfig, initialize_llama_on_first_run
     LLAMA_AVAILABLE = True
 except Exception as _llama_import_err:
     LLAMA_AVAILABLE = False
@@ -806,7 +867,8 @@ except Exception as e:
 
 # ── --validate: replay the real startup import chain and report failures ──
 if getattr(args, 'validate', False):
-    import importlib, importlib.util
+    import importlib
+    import importlib.util
 
     _base = os.path.dirname(os.path.abspath(
         sys.executable if getattr(sys, 'frozen', False) else __file__))
@@ -835,7 +897,7 @@ if getattr(args, 'validate', False):
                 pass
 
     _vprint(f"\n{'='*60}")
-    _vprint(f"NUNBA BUILD VALIDATION")
+    _vprint("NUNBA BUILD VALIDATION")
     _vprint(f"{'='*60}")
     _vprint(f"Base: {_base}")
     _vprint(f"Frozen: {getattr(sys, 'frozen', False)}")
@@ -940,7 +1002,7 @@ if getattr(args, 'validate', False):
     # A shallow import succeeds but critical features are broken at runtime.
     # Check module state AFTER import to verify they actually loaded properly.
     _vprint(f"\n{'─'*40}")
-    _vprint(f"DEEP HEALTH CHECKS")
+    _vprint("DEEP HEALTH CHECKS")
     _vprint(f"{'─'*40}")
 
     _deep_checks = {
@@ -994,7 +1056,7 @@ if getattr(args, 'validate', False):
 
     # ── Phase 3: Config file checks ──
     _vprint(f"\n{'─'*40}")
-    _vprint(f"CONFIG FILE CHECKS")
+    _vprint("CONFIG FILE CHECKS")
     _vprint(f"{'─'*40}")
 
     _required_files = [
@@ -1037,7 +1099,7 @@ if getattr(args, 'validate', False):
     _vprint(f"\n{'='*60}")
     _vprint(f"  Passed: {len(_ok)}, Failed: {len(_fail)}, Warnings: {len(_warn)}")
     if _warn:
-        _vprint(f"\n  WARNINGS (non-fatal — runtime config issues):")
+        _vprint("\n  WARNINGS (non-fatal — runtime config issues):")
         for _wmod, _wmsg in _warn:
             _vprint(f"    - {_wmod}: {_wmsg}")
     if _fail:
@@ -1048,7 +1110,7 @@ if getattr(args, 'validate', False):
         _val_log.close()
         os._exit(1)  # os._exit skips Py_Finalize — prevents 0xC0000005 in Win32GUI
     else:
-        _vprint(f"\n  All modules bundled correctly. Build is good.\n")
+        _vprint("\n  All modules bundled correctly. Build is good.\n")
         _val_log.close()
         os._exit(0)  # os._exit skips Py_Finalize — prevents 0xC0000005 in Win32GUI
 
@@ -1090,7 +1152,7 @@ if getattr(args, 'install_ai', False):
     print("=" * 60)
     try:
         # Use unified AI installer for all components
-        from desktop.ai_installer import AIInstaller, get_platform_name, detect_gpu
+        from desktop.ai_installer import AIInstaller, detect_gpu, get_platform_name
 
         gpu_info = detect_gpu()
         _setup_logger.info(f"Platform: {get_platform_name()}, GPU: {gpu_info['name'] or 'Not detected'}")
@@ -1220,7 +1282,9 @@ if getattr(args, 'setup_ai', False):
     else:
         try:
             import tkinter as _stk
-            from PIL import Image as _PILImg, ImageTk as _PILTk
+
+            from PIL import Image as _PILImg
+            from PIL import ImageTk as _PILTk
 
             _shared_root = _stk.Tk()
             _shared_root.withdraw()
@@ -1300,7 +1364,7 @@ if getattr(args, 'setup_ai', False):
     # Scan for existing endpoints
     existing_endpoints = []
     try:
-        from llama.llama_config import scan_existing_llm_endpoints, scan_openai_compatible_ports, LlamaConfig
+        from llama.llama_config import LlamaConfig
         _setup_logger.info("--setup-ai: llama_config imported successfully")
 
         # Scan known endpoints
@@ -1331,7 +1395,7 @@ if getattr(args, 'setup_ai', False):
     # ── Check llama.cpp version if installed ──
     _llama_version_info = {"installed": False, "version": None, "outdated": False, "path": None}
     try:
-        from llama.llama_installer import LlamaInstaller, MIN_LLAMACPP_BUILD_QWEN35
+        from llama.llama_installer import MIN_LLAMACPP_BUILD_QWEN35, LlamaInstaller
         _version_installer = LlamaInstaller()
         _llama_path = _version_installer.find_llama_server()
         if _llama_path:
@@ -1358,10 +1422,10 @@ if getattr(args, 'setup_ai', False):
     # Show GUI dialog for user choice
     try:
         import tkinter as tk
-        from tkinter import ttk, messagebox
+        from tkinter import messagebox, ttk
         _setup_logger.info("--setup-ai: tkinter imported, showing GUI dialog")
 
-        from desktop.ai_key_vault import AIKeyVault, CLOUD_PROVIDERS
+        from desktop.ai_key_vault import CLOUD_PROVIDERS, AIKeyVault
 
         user_choice = {"action": None, "endpoint": None, "custom_url": None,
                        "cloud_provider": None, "cloud_config": None}
@@ -1866,7 +1930,7 @@ if getattr(args, 'setup_ai', False):
                             root.after(2500, lambda: upd_overlay.destroy())
 
                         root.after(0, _finish)
-                    except Exception as ex:
+                    except Exception:
                         root.after(0, lambda: upd_status.set(f"Error: {ex}"))
                         root.after(0, lambda: upd_spin_lbl.configure(
                             text="\u2717 Failed", fg=_WARN))
@@ -2057,7 +2121,7 @@ if getattr(args, 'setup_ai', False):
             else:
                 print("  Starting download...")
                 # Run the AI installer
-                from desktop.ai_installer import AIInstaller, get_platform_name, detect_gpu
+                from desktop.ai_installer import AIInstaller, detect_gpu, get_platform_name
 
                 gpu_info = detect_gpu()
                 print(f"  Platform: {get_platform_name()}")
@@ -2213,7 +2277,7 @@ def get_screen_dimensions():
         if sys.platform == "win32":
             try:
                 import ctypes
-                from ctypes import windll, Structure, byref
+                from ctypes import Structure, byref, windll
                 from ctypes.wintypes import RECT
 
                 class RECT(Structure):
@@ -2304,7 +2368,7 @@ def calculate_perfect_right_dock():
     perfect_x = screen_width - perfect_width  # flush right edge
     perfect_y = 0
 
-    logger.info(f"=== DIRECT PERFECT VALUES ===")
+    logger.info("=== DIRECT PERFECT VALUES ===")
     logger.info(f"Screen: {screen_width}x{screen_height}")
     logger.info(f"Using: x={perfect_x}, y={perfect_y}, width={perfect_width}, height={perfect_height}")
     logger.info(f"Right edge will be: {perfect_x + perfect_width}")
@@ -2409,7 +2473,6 @@ def setup_always_on_top(window_instance):
         return False
 
     try:
-        import ctypes
         from ctypes import windll
 
         def set_always_on_top():
@@ -2465,7 +2528,7 @@ def call_stop_api():
 
         if os.path.exists(user_data_file):
             try:
-                with open(user_data_file, 'r') as f:
+                with open(user_data_file) as f:
                     user_data = json.load(f)
                     user_id = user_data.get('user_id')
 
@@ -2731,7 +2794,7 @@ def check_existing_user_data():
             logger.info("Found existing user_data.json, checking contents")
 
             try:
-                with open(user_data_file, 'r') as f:
+                with open(user_data_file) as f:
                     user_data = json.load(f)
 
                 logger.info(f"Loaded the JSON file from storage the value contains {user_data.keys()}")
@@ -3593,30 +3656,24 @@ def setup_connectivity_monitor(window, port):
     window.events.loaded += on_page_loaded
 
 
+def _dynamic_wsgi_app(environ, start_response):
+    """WSGI dispatcher that routes to flask_app (full) when available, else gui_app."""
+    app = flask_app if flask_app is not None else gui_app
+    return app(environ, start_response)
+
+
 def start_flask():
     """Start the Flask server in a separate thread.
 
-    If main.py hasn't finished importing yet (flask_app is None), starts
-    with the lightweight gui_app first so the webview can load the React
-    SPA immediately. A background thread waits for flask_app and restarts
-    Waitress with the full app when ready.
+    Uses a dynamic WSGI dispatcher so that once main.py finishes importing
+    and sets flask_app, all new requests are automatically routed to the
+    full Flask app — no server restart needed.
     """
     global flask_app
     _serving_app = flask_app
     if _serving_app is None:
-        logger.info("flask_app not ready yet — serving lightweight gui_app first")
+        logger.info("flask_app not ready yet — serving dynamic dispatcher (gui_app until main.py loads)")
         _serving_app = gui_app
-
-        # Background hot-swap: wait for main.py import, then reload webview
-        def _hot_swap():
-            for _ in range(300):  # wait up to 5 min
-                time.sleep(1)
-                if flask_app is not None:
-                    logger.info("[HOT-SWAP] main.py ready — webview will use full app on next reload")
-                    return
-            logger.warning("[HOT-SWAP] main.py never loaded after 5 min")
-
-        threading.Thread(target=_hot_swap, daemon=True, name='flask-hot-swap').start()
     try:
         # Add CORS preflight handler for all routes
         # Use _serving_app (gui_app when flask_app is None, flask_app when ready)
@@ -3817,10 +3874,10 @@ def start_flask():
                 return jsonify({"status": "ok"})
 
             try:
-                user_data_file = os.path.join(os.path.expanduser('~'), 'Documents', 'HevolveAi Agent Companion', 'storage', f'user_data.json')
+                user_data_file = os.path.join(os.path.expanduser('~'), 'Documents', 'HevolveAi Agent Companion', 'storage', 'user_data.json')
 
                 if os.path.exists(user_data_file):
-                    with open(user_data_file, 'r') as f:
+                    with open(user_data_file) as f:
                         user_data = json.load(f)
 
                     if key in user_data:
@@ -3963,7 +4020,6 @@ def start_flask():
                 else:
                     # Remove always on top
                     if sys.platform == "win32":
-                        import ctypes
                         from ctypes import windll
 
                         hwnd = windll.user32.FindWindowW(None, args.title)
@@ -4065,9 +4121,8 @@ def start_flask():
                 windows_api_info = {}
                 if sys.platform == "win32":
                     try:
-                        import ctypes
-                        from ctypes import windll, Structure, byref
-                        from ctypes.wintypes import RECT, HWND
+                        from ctypes import byref, windll
+                        from ctypes.wintypes import RECT
 
                         # Find window by title
                         hwnd = windll.user32.FindWindowW(None, args.title)
@@ -4351,7 +4406,7 @@ def start_flask():
 
                 global _window
                 if _window:
-                    logger.info(f"=== DIRECT MOVE TEST ===")
+                    logger.info("=== DIRECT MOVE TEST ===")
                     logger.info(f"Moving to EXACT position: x={x}, y={y}, size={width}x{height}")
 
                     # First resize
@@ -4396,7 +4451,7 @@ def start_flask():
                 safety_buffer = 20
                 target_requested_height = screen_height - pywebview_height_overhead - safety_buffer
 
-                logger.info(f"=== HEIGHT TEST ===")
+                logger.info("=== HEIGHT TEST ===")
                 logger.info(f"Working area: {screen_height}px")
                 logger.info(f"PyWebView overhead: {pywebview_height_overhead}px")
                 logger.info(f"Safety buffer: {safety_buffer}px")
@@ -4494,12 +4549,14 @@ def start_flask():
             })
 
         # Start the Flask application via waitress (production WSGI)
-        # Use _serving_app — may be gui_app (lightweight) or flask_app (full)
+        # Use _dynamic_wsgi_app when flask_app isn't ready yet — it will
+        # automatically route to flask_app once main.py import completes.
+        _wsgi_target = _serving_app if _serving_app is flask_app else _dynamic_wsgi_app
         # Lazy import — avoids crash if waitress wasn't bundled in frozen exe
         try:
             from waitress import serve as _serve
-            logger.info(f"Starting Waitress server on port {args.port} (app={'full' if _serving_app is flask_app else 'lightweight'})")
-            _serve(_serving_app, host="0.0.0.0", port=args.port, threads=8)
+            logger.info(f"Starting Waitress server on port {args.port} (app={'full' if _serving_app is flask_app else 'dynamic-dispatcher'})")
+            _serve(_wsgi_target, host="0.0.0.0", port=args.port, threads=8)
         except ImportError:
             logger.warning("waitress not available, falling back to Flask dev server")
             # Patch stdout/stderr before .run() to prevent click.echo crash
@@ -4528,7 +4585,7 @@ def get_server_info():
         device_id_dir = os.path.join(user_docs, 'HevolveAi Agent Companion')
         device_id_file = os.path.join(device_id_dir, 'device_id.json')
         if os.path.exists(device_id_file):
-            with open(device_id_file, 'r') as f:
+            with open(device_id_file) as f:
                 data = json.load(f)
                 return {"device_id": data.get('device_id')}
     except Exception as e:
@@ -4550,8 +4607,7 @@ def set_window_theme_attribute(window_instance):
         return False
 
     try:
-        import ctypes
-        from ctypes import windll, c_int, byref, sizeof
+        from ctypes import byref, c_int, sizeof, windll
 
         # Windows 11 specific constants
         DWMWA_USE_IMMERSIVE_DARK_MODE = 20
@@ -4619,7 +4675,6 @@ def apply_dark_mode_to_all_windows():
         return
 
     import ctypes
-    import time
     import threading
 
     # Windows 10/11 dark mode constants
@@ -4785,7 +4840,8 @@ def setup_system_tray(window_instance):
             def _show_wizard():
                 try:
                     import tkinter as _tk
-                    from desktop.ai_key_vault import AIKeyVault, CLOUD_PROVIDERS
+
+                    from desktop.ai_key_vault import CLOUD_PROVIDERS, AIKeyVault
                     vault = AIKeyVault.get_instance()
                     _BG = '#0F0E17'; _CARD = '#1A1730'; _ACC = '#6C63FF'
                     _TXT = '#E8E6F0'; _DIM = '#72757E'; _BRD = '#2D2A40'
@@ -4964,7 +5020,7 @@ def start_database_service():
     and is NOT used by Nunba.
     """
     try:
-        from sql.database import get_engine, Base
+        from sql.database import Base, get_engine
         engine = get_engine()
         Base.metadata.create_all(engine)
         logger.info("hevolve-database initialized (pip-installed, SQLite)")
@@ -5067,7 +5123,7 @@ def main():
             handle_protocol_launch()
             logger.info("=== PROTOCOL HANDLING COMPLETED SUCCESSFULLY ===")
         except Exception as e:
-            logger.error(f"=== PROTOCOL HANDLING FAILED ===")
+            logger.error("=== PROTOCOL HANDLING FAILED ===")
             logger.error(f"Protocol error: {str(e)}")
             logger.error(traceback.format_exc())
             # Don't exit - continue with normal startup
@@ -5082,7 +5138,7 @@ def main():
         flask_thread.start()
         logger.info("Flask thread started successfully")
     except Exception as ex:
-        logger.error(f"=== Flask server could not be started ===")
+        logger.error("=== Flask server could not be started ===")
         logger.error(f"Flask error: {str(ex)}")
         logger.error(traceback.format_exc())
 
@@ -5106,7 +5162,7 @@ def main():
         # Keep splash responsive while waiting
         try:
             if _splash_root:
-                _splash_root.update()  # update() not update_idletasks() — processes paint+timer events
+                _safe_tk_update(_splash_root)
         except Exception:
             pass
         time.sleep(0.5)
@@ -5258,6 +5314,68 @@ def main():
             _hotkey_thread.start()
             logger.info("[STARTUP] Global hotkey listener thread started (Win+N)")
 
+        # ── React mount guard — runs for ALL modes (not just background) ──
+        # pywebview's WebView2 can suspend rAF/CSS transitions during creation,
+        # preventing React 18's createRoot from completing the initial render.
+        # This fires on the first `loaded` event and forces opacity/transitions.
+        _mount_guard_fired = [False]
+
+        def _on_any_loaded():
+            if _mount_guard_fired[0]:
+                return
+            _mount_guard_fired[0] = True
+
+            def _mount_guard():
+                # Wait for React to settle after page load
+                time.sleep(2.0)
+                try:
+                    state = _window.evaluate_js(
+                        "(function(){"
+                        "  var r = document.getElementById('root');"
+                        "  if (!r) return 'no_root';"
+                        "  if (r.children.length === 0) return 'empty';"
+                        "  return 'mounted';"
+                        "})()"
+                    )
+                    logger.info(f"[MOUNT_GUARD] Initial check: {state}")
+
+                    if state == 'mounted':
+                        # Force CSS transitions to final state (WebView2 may have suspended them)
+                        _window.evaluate_js(
+                            "(function(){"
+                            "  document.querySelectorAll('[style*=\"opacity\"]').forEach(function(el){"
+                            "    if (getComputedStyle(el).opacity === '0') {"
+                            "      el.style.transition = 'none';"
+                            "      el.style.opacity = '1';"
+                            "    }"
+                            "  });"
+                            "  var hero = document.getElementById('hero-section');"
+                            "  if (hero) { hero.style.transition = 'none'; hero.style.opacity = '1'; }"
+                            "  document.body.style.display = 'none';"
+                            "  void document.body.offsetHeight;"
+                            "  document.body.style.display = '';"
+                            "})()"
+                        )
+                        logger.info("[MOUNT_GUARD] Transitions forced, repaint done")
+                    elif state in ('empty', 'no_root', None):
+                        logger.warning(f"[MOUNT_GUARD] React not mounted ({state}) — reloading")
+                        _window.load_url(f"http://localhost:{args.port}/local")
+                        time.sleep(3.0)
+                        # Force resize to wake compositor
+                        try:
+                            w, h = _window.width, _window.height
+                            _window.resize(w + 1, h)
+                            time.sleep(0.1)
+                            _window.resize(w, h)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.warning(f"[MOUNT_GUARD] Check failed: {e}")
+
+            threading.Thread(target=_mount_guard, daemon=True, name='mount_guard').start()
+
+        _window.events.loaded += _on_any_loaded
+
         # In background mode, reload the page on first show — the initial load
         # may have hit Flask before it was fully ready (especially on Windows boot).
         if start_hidden:
@@ -5311,16 +5429,31 @@ def main():
                         logger.info(f"[BACKGROUND] Mount check #{attempt + 1}: {state}")
 
                         if state == 'mounted':
-                            # React is up — force compositor repaint and done
+                            # React is up but CSS transitions (opacity, blur) may not
+                            # have fired — WebView2 suspends CSS animations while hidden.
+                            # Force all transition-dependent elements to their final state.
                             try:
                                 _window.evaluate_js(
-                                    "document.body.style.display='none';"
-                                    "void document.body.offsetHeight;"
-                                    "document.body.style.display='';"
+                                    "(function(){"
+                                    "  var hero = document.getElementById('hero-section');"
+                                    "  if (hero) {"
+                                    "    hero.style.transition = 'none';"
+                                    "    hero.style.opacity = '1';"
+                                    "    hero.style.filter = 'none';"
+                                    "  }"
+                                    "  document.querySelectorAll('[style*=\"opacity: 0\"]').forEach(function(el){"
+                                    "    el.style.transition = 'none';"
+                                    "    el.style.opacity = '1';"
+                                    "    el.style.filter = 'none';"
+                                    "  });"
+                                    "  document.body.style.display = 'none';"
+                                    "  void document.body.offsetHeight;"
+                                    "  document.body.style.display = '';"
+                                    "})()"
                                 )
                             except Exception:
                                 pass
-                            logger.info("[BACKGROUND] React mounted — repaint forced")
+                            logger.info("[BACKGROUND] React mounted — transitions forced, repaint done")
                             return
 
                         # state is 'empty', 'no_root', or None — React didn't mount.
@@ -5690,13 +5823,13 @@ def handle_protocol_launch():
         logger.info("No protocol argument provided")
         return
 
-    logger.info(f"=== PROTOCOL LAUNCH HANDLER STARTED ===")
+    logger.info("=== PROTOCOL LAUNCH HANDLER STARTED ===")
     logger.info(f"Raw protocol argument: {args.protocol}")
     logger.info(f"All arguments: {sys.argv}")
 
     # Parse the protocol URL to extract parameters
     try:
-        from urllib.parse import urlparse, parse_qs, unquote
+        from urllib.parse import parse_qs, unquote, urlparse
 
         # Handle different protocol formats
         protocol_url = args.protocol
@@ -5760,7 +5893,7 @@ def handle_protocol_launch():
         if agent_name:
             logger.info(f"Protocol specified agent: {agent_name}")
             # Store for later use when window is created
-            setattr(args, 'protocol_agent', agent_name)
+            args.protocol_agent = agent_name
             # Update URL to specific agent
             new_url = f"https://hevolve.hertzai.com/agents/{agent_name}?companion=true"
             if _window:
@@ -5811,7 +5944,7 @@ def handle_protocol_launch():
         if action in ['show', 'maximize']:
             args.background = False
 
-        logger.info(f"Protocol processing completed successfully")
+        logger.info("Protocol processing completed successfully")
         logger.info(f"Final args state: action={action}, sidebar={args.sidebar}, background={args.background}")
 
     except ImportError as ie:
@@ -5819,10 +5952,10 @@ def handle_protocol_launch():
         logger.error("urllib.parse not available - this should not happen in Python 3")
         raise
     except Exception as e:
-        logger.error(f"=== PROTOCOL HANDLING EXCEPTION ===")
+        logger.error("=== PROTOCOL HANDLING EXCEPTION ===")
         logger.error(f"Error type: {type(e).__name__}")
         logger.error(f"Error message: {str(e)}")
-        logger.error(f"Protocol handling traceback:")
+        logger.error("Protocol handling traceback:")
         logger.error(traceback.format_exc())
 
         # Don't fail silently - still try to start the app normally
@@ -5843,7 +5976,6 @@ def _show_splash():
     try:
         logger.info("[SPLASH] Importing tkinter...")
         import tkinter as tk
-        import math
 
         logger.info("[SPLASH] Creating Tk root window...")
         if _eroot is not None:
@@ -5952,7 +6084,7 @@ def _show_splash():
             logger.warning(traceback.format_exc())
 
         logger.info("[SPLASH] Calling root.update()...")
-        root.update()  # process paint + timer events so animation renders
+        _safe_tk_update(root)
         logger.info("[SPLASH] Splash screen visible")
 
         def close_splash():
@@ -6031,7 +6163,7 @@ if __name__ == "__main__":
         try:
             if _splash_root and _splash_status:
                 _splash_status.set(msg)
-                _splash_root.update()  # update() not update_idletasks() — keeps animation alive
+                _safe_tk_update(_splash_root)
         except Exception:
             pass
 
@@ -6047,13 +6179,13 @@ if __name__ == "__main__":
         _startup_phase = 'initializing'
         _splash_update('Initializing...')
         logger.info("=== STARTUP SEQUENCE INITIATED ===")
-        logger.info(f"Starting HevolveAi Agent Companion GUI Application")
+        logger.info("Starting HevolveAi Agent Companion GUI Application")
         logger.info(f"Arguments: {sys.argv}")
         logger.info(f"Protocol detected: {hasattr(args, 'protocol') and args.protocol}")
 
         # Add more detailed logging for protocol detection
         if hasattr(args, 'protocol') and args.protocol:
-            logger.info(f"=== PROTOCOL LAUNCH DETECTED ===")
+            logger.info("=== PROTOCOL LAUNCH DETECTED ===")
             logger.info(f"Protocol value: {args.protocol}")
             logger.info(f"Background mode before protocol handling: {args.background}")
 
@@ -6095,7 +6227,7 @@ if __name__ == "__main__":
         while _import_thread.is_alive() and time.time() < _import_timeout:
             try:
                 if _splash_root:
-                    _splash_root.update()
+                    _safe_tk_update(_splash_root)
             except Exception:
                 pass
             time.sleep(0.03)
@@ -6179,7 +6311,7 @@ if __name__ == "__main__":
                         try:
                             from desktop.ai_key_vault import AIKeyVault
                             AIKeyVault.get_instance().export_to_env()
-                            logger.info(f"Cloud provider keys exported to env")
+                            logger.info("Cloud provider keys exported to env")
                         except Exception:
                             pass
 
@@ -6271,10 +6403,10 @@ if __name__ == "__main__":
             pass
         sys.exit(e.code)
     except Exception as e:
-        logger.error(f"=== APPLICATION CRASHED ===")
+        logger.error("=== APPLICATION CRASHED ===")
         logger.error(f"Error type: {type(e).__name__}")
         logger.error(f"Error message: {str(e)}")
-        logger.error(f"Full traceback:")
+        logger.error("Full traceback:")
         logger.error(traceback.format_exc())
 
         # Create a visible error log if something went wrong at startup

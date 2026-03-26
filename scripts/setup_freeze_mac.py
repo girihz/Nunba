@@ -8,10 +8,15 @@ Usage:
     python setup_freeze_mac.py build       # Build .app bundle
     python setup_freeze_mac.py bdist_dmg   # Build DMG installer
 """
-import sys
-import os
 import glob
-from cx_Freeze import setup, Executable
+import os
+import sys
+
+# cx_Freeze traces deep dependency chains (langchain, autogen, etc.) that
+# can exceed Python's default 1000-frame recursion limit during compilation.
+sys.setrecursionlimit(5000)
+
+from cx_Freeze import Executable, setup
 
 # Ensure we're on macOS
 if sys.platform != "darwin":
@@ -22,7 +27,15 @@ if sys.platform != "darwin":
 _scripts_dir = os.path.dirname(os.path.abspath(__file__))
 if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
+
+# Ensure project root is on sys.path so cx_Freeze can find local packages
+# (llama, desktop, routes, tts, models, etc.)
+_project_root = os.path.normpath(os.path.join(_scripts_dir, '..'))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 from deps import VERSION, version_short
+
 
 def ensure_icon_exists():
     """Create .icns icon file from PNG if needed"""
@@ -34,8 +47,9 @@ def ensure_icon_exists():
     for logo_file in logo_files:
         if os.path.exists(logo_file):
             try:
-                from PIL import Image
                 import subprocess
+
+                from PIL import Image
 
                 # Create iconset directory
                 iconset_path = "app.iconset"
@@ -79,6 +93,7 @@ icon_path = ensure_icon_exists()
 
 # Common packages for all platforms
 build_exe_options = {
+    "path": sys.path + [_project_root],
     "packages": [
         "os", "sys", "flask", "threading", "logging",
         "webview", "argparse", "importlib", "traceback",
@@ -106,6 +121,7 @@ build_exe_options = {
         "jose",
     ],
     "zip_includes": [],
+    "zip_exclude_packages": ["*"],  # extract all packages to filesystem (avoids zip import issues on macOS)
     "build_exe": "build/Nunba.app/Contents/MacOS",
     "excludes": [
         "unittest", "test", "tests",
@@ -174,6 +190,7 @@ build_exe_options["include_files"] = list(build_exe_options["include_files"]) + 
 
 # Include agent_ledger package if not pip-installed (lives in sibling dir)
 import importlib.util as _ilu_pre
+
 if not _ilu_pre.find_spec("agent_ledger"):
     _al_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             '..', '..', 'HARTOS', 'agent-ledger-opensource', 'agent_ledger')
@@ -185,6 +202,7 @@ if not _ilu_pre.find_spec("agent_ledger"):
 
 # ── Conditionally include optional packages ──
 import importlib.util as _ilu
+
 _optional_packages = [
     "autogen", "autogen_agentchat", "apscheduler", "json_repair",
     "integrations", "integrations.social", "integrations.coding_agent",
@@ -280,6 +298,11 @@ info_plist = f"""<?xml version="1.0" encoding="UTF-8"?>
     </array>
     <key>LSUIElement</key>
     <false/>
+    <key>LSArchitecturePriority</key>
+    <array>
+        <string>arm64</string>
+        <string>x86_64</string>
+    </array>
 </dict>
 </plist>
 """

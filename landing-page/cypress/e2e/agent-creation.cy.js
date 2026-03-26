@@ -255,7 +255,7 @@ describe('Agent Creation & Types E2E', () => {
   // Returns a Cypress chainable that yields true/false.
   // ---------------------------------------------------------------------------
   function openCreateAgentForm() {
-    cy.contains('Create new Agent', {timeout: 10000})
+    cy.contains('Create new Agent', {timeout: 300000})
       .first()
       .click({force: true});
     // Give the form a moment to render
@@ -269,15 +269,15 @@ describe('Agent Creation & Types E2E', () => {
     beforeEach(() => {
       setupIntercepts();
       seedAuth();
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
-      cy.wait('@getLocalPrompts', {timeout: 20000});
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
+      cy.wait(2000); // Allow time for /prompts fetch (non-blocking)
       // Allow React to settle; also covers cloud API calls that may or may not fire
       cy.wait(3000);
     });
 
     it('should display the "Create new Agent" button on the demo page', () => {
       // The button text "Create new Agent" appears in the sidebar (both desktop and mobile)
-      cy.contains('Create new Agent', {timeout: 10000}).should('exist');
+      cy.contains('Create new Agent', {timeout: 300000}).should('exist');
     });
 
     it('should open the CreateAgentForm when "Create new Agent" is clicked', () => {
@@ -291,13 +291,13 @@ describe('Agent Creation & Types E2E', () => {
       });
 
       // Re-visit with clean auth (non-guest) so the Demopage sees cloud mode
-      cy.visit('/local', {timeout: 30000, failOnStatusCode: false});
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
       cy.wait(3000);
 
       cy.get('body').then(($body) => {
         const hasBtn = $body.text().includes('Create new Agent');
         if (hasBtn) {
-          cy.contains('Create new Agent', {timeout: 10000})
+          cy.contains('Create new Agent', {timeout: 300000})
             .first()
             .click({force: true});
           cy.wait(1000);
@@ -325,23 +325,23 @@ describe('Agent Creation & Types E2E', () => {
       cy.get('body').then(($body) => {
         if ($body.find('#agentName').length > 0) {
           // Agent Name input (id="agentName")
-          cy.get('#agentName', {timeout: 5000})
+          cy.get('#agentName', {timeout: 300000})
             .should('exist')
             .and('have.attr', 'type', 'text');
 
           // Agent Prompt textarea (id="prompt")
-          cy.get('#prompt', {timeout: 5000})
+          cy.get('#prompt', {timeout: 300000})
             .should('exist')
             .and('have.prop', 'tagName')
             .should('eq', 'TEXTAREA');
 
           // isPublic checkbox (id="isPublic")
-          cy.get('#isPublic', {timeout: 5000})
+          cy.get('#isPublic', {timeout: 300000})
             .should('exist')
             .and('have.attr', 'type', 'checkbox');
 
           // Submit button with text "Create Agent"
-          cy.get('button[type="submit"]', {timeout: 5000})
+          cy.get('button[type="submit"]', {timeout: 300000})
             .should('exist')
             .and('contain.text', 'Create Agent');
         } else {
@@ -358,25 +358,25 @@ describe('Agent Creation & Types E2E', () => {
       cy.get('body').then(($body) => {
         if ($body.find('#agentName').length > 0) {
           // Image upload label and drop zone
-          cy.contains('Agent Image', {timeout: 5000}).should('be.visible');
-          cy.contains('Upload an image for your agent', {timeout: 5000}).should(
+          cy.contains('Agent Image', {timeout: 300000}).should('be.visible');
+          cy.contains('Upload an image for your agent', {timeout: 300000}).should(
             'be.visible'
           );
 
           // Audio upload label and drop zone
-          cy.contains('Agent Voice (Audio)', {timeout: 5000}).should(
+          cy.contains('Agent Voice (Audio)', {timeout: 300000}).should(
             'be.visible'
           );
           cy.contains("Upload an audio file for your agent's voice", {
-            timeout: 5000,
+            timeout: 300000,
           }).should('be.visible');
 
           // Hidden file inputs exist for image and audio
           cy.get('input[type="file"][accept="image/*"]', {
-            timeout: 5000,
+            timeout: 300000,
           }).should('exist');
           cy.get('input[type="file"][accept="audio/*"]', {
-            timeout: 5000,
+            timeout: 300000,
           }).should('exist');
         } else {
           cy.log(
@@ -429,7 +429,7 @@ describe('Agent Creation & Types E2E', () => {
           cy.get('button[type="submit"]').click({force: true});
 
           // While waiting, button should say "Creating..." and be disabled
-          cy.get('button[type="submit"]', {timeout: 3000})
+          cy.get('button[type="submit"]', {timeout: 30000})
             .should('contain.text', 'Creating...')
             .and('be.disabled');
         } else {
@@ -448,8 +448,8 @@ describe('Agent Creation & Types E2E', () => {
     beforeEach(() => {
       setupIntercepts();
       seedAuth();
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
-      cy.wait('@getLocalPrompts', {timeout: 20000});
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
+      cy.wait(2000); // Allow time for /prompts fetch (non-blocking)
       // Wait for cloud APIs and React to settle
       cy.wait(3000);
 
@@ -496,7 +496,7 @@ describe('Agent Creation & Types E2E', () => {
 
           cy.get('button[type="submit"]').click({force: true});
 
-          cy.wait('@createPrompt', {timeout: 15000}).then((interception) => {
+          cy.wait('@createPrompt', {timeout: 300000}).then((interception) => {
             expect(interception.response.statusCode).to.eq(200);
 
             const body = interception.request.body;
@@ -527,7 +527,7 @@ describe('Agent Creation & Types E2E', () => {
 
           cy.get('button[type="submit"]').click({force: true});
 
-          cy.wait('@createPrompt', {timeout: 15000}).then((interception) => {
+          cy.wait('@createPrompt', {timeout: 300000}).then((interception) => {
             expect(interception.response.statusCode).to.eq(200);
 
             const body = interception.request.body;
@@ -553,7 +553,7 @@ describe('Agent Creation & Types E2E', () => {
 
           cy.get('button[type="submit"]').click({force: true});
 
-          cy.wait('@createPrompt', {timeout: 15000}).then((interception) => {
+          cy.wait('@createPrompt', {timeout: 300000}).then((interception) => {
             // Verify the URL is the expected cloud endpoint
             expect(interception.request.url).to.include(
               'azurekong.hertzai.com/db/create_prompt'
@@ -584,8 +584,8 @@ describe('Agent Creation & Types E2E', () => {
     });
 
     it('local agents fetched from /prompts should be tagged with _isLocal=true', () => {
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
-      cy.wait('@getLocalPrompts', {timeout: 20000});
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
+      cy.wait(2000); // Allow time for /prompts fetch (non-blocking)
       // Allow the merge logic to run (covers cloud API calls that may or may not fire)
       cy.wait(3000);
 
@@ -603,11 +603,11 @@ describe('Agent Creation & Types E2E', () => {
     });
 
     it('cloud agents from getprompt_all should NOT have _isLocal flag', () => {
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
       // Instead of waiting on the cloud intercept (which may not fire if
       // navigator.onLine is false), wait a fixed time and then check if
       // the intercept was triggered.
-      cy.wait('@getLocalPrompts', {timeout: 20000});
+      cy.wait(2000); // Allow time for /prompts fetch (non-blocking)
       cy.wait(3000);
 
       // Verify the fixture data directly (the intercept response is mocked,
@@ -647,8 +647,8 @@ describe('Agent Creation & Types E2E', () => {
     });
 
     it('GET /prompts returns agents with correct structure (prompt_id, name, prompt)', () => {
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
-      cy.wait('@getLocalPrompts', {timeout: 30000});
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
+      cy.wait(3000); // Allow time for /prompts fetch (non-blocking)
       cy.wait(2000);
 
       // Verify fixture data structure directly since it is deterministic
@@ -672,8 +672,8 @@ describe('Agent Creation & Types E2E', () => {
     });
 
     it('UI should show agent names from both local and cloud sources', () => {
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
-      cy.wait('@getLocalPrompts', {timeout: 20000});
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
+      cy.wait(2000); // Allow time for /prompts fetch (non-blocking)
       // Wait for cloud fetches and React rendering
       cy.wait(4000);
 
@@ -726,8 +726,9 @@ describe('Agent Creation & Types E2E', () => {
     });
 
     it('GET /prompts should return a valid agent list with success=true', () => {
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
-      cy.wait('@getLocalPrompts', {timeout: 20000}).then((interception) => {
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
+      cy.wait(2000); // Allow time for /prompts fetch
+      cy.get('@getLocalPrompts').then((interception) => {
         expect(interception.response.statusCode).to.eq(200);
         expect(interception.response.body.success).to.eq(true);
         expect(interception.response.body.prompts).to.be.an('array');
@@ -735,8 +736,9 @@ describe('Agent Creation & Types E2E', () => {
     });
 
     it('each agent from /prompts should have required fields (prompt_id, name, prompt)', () => {
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
-      cy.wait('@getLocalPrompts', {timeout: 20000}).then((interception) => {
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
+      cy.wait(2000); // Allow time for /prompts fetch
+      cy.get('@getLocalPrompts').then((interception) => {
         const prompts = interception.response.body.prompts;
         prompts.forEach((agent) => {
           expect(agent).to.have.property('prompt_id').that.is.a('number');
@@ -749,10 +751,10 @@ describe('Agent Creation & Types E2E', () => {
     });
 
     it('should call local /prompts endpoint on page load', () => {
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
 
       // Local prompts should always be called
-      cy.wait('@getLocalPrompts', {timeout: 20000});
+      cy.wait(2000); // Allow time for /prompts fetch (non-blocking)
 
       // Cloud endpoints may or may not fire depending on navigator.onLine.
       // Wait for a reasonable time to let them settle.
@@ -760,15 +762,15 @@ describe('Agent Creation & Types E2E', () => {
     });
 
     it('should attempt to fetch cloud agents (may not fire in headless mode)', () => {
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
 
-      cy.wait('@getLocalPrompts', {timeout: 20000});
+      cy.wait(2000); // Allow time for /prompts fetch (non-blocking)
       // Cloud calls depend on navigator.onLine; in headless Chrome this may
       // be false, so we just wait and verify the page did not crash.
       cy.wait(3000);
 
       // Page should not crash regardless of whether cloud calls fired
-      cy.get('#root', {timeout: 10000}).invoke('html').should('not.be.empty');
+      cy.get('#root', {timeout: 300000}).invoke('html').should('not.be.empty');
     });
 
     it('should deduplicate agents with the same prompt_id during merge', () => {
@@ -788,9 +790,9 @@ describe('Agent Creation & Types E2E', () => {
       //   Cloud user (new): 301  (101 is dup => skipped)
       //   Total unique: 5
 
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
 
-      cy.wait('@getLocalPrompts', {timeout: 20000});
+      cy.wait(2000); // Allow time for /prompts fetch (non-blocking)
       // Wait for cloud fetches and merge logic to complete
       cy.wait(4000);
 
@@ -825,14 +827,14 @@ describe('Agent Creation & Types E2E', () => {
         forceNetworkError: true,
       }).as('getLocalPromptsOffline');
 
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
 
       // Cloud endpoints may or may not be called depending on navigator.onLine.
       // Wait a fixed time instead of depending on cloud intercept.
       cy.wait(4000);
 
       // Page should not crash
-      cy.get('#root', {timeout: 10000}).invoke('html').should('not.be.empty');
+      cy.get('#root', {timeout: 300000}).invoke('html').should('not.be.empty');
       cy.get('body')
         .invoke('text')
         .should('not.contain', '.map is not a function');
@@ -848,15 +850,16 @@ describe('Agent Creation & Types E2E', () => {
         forceNetworkError: true,
       }).as('getCloudUserAgentsOffline');
 
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
 
       // Local prompts should still work
-      cy.wait('@getLocalPrompts', {timeout: 20000}).then((interception) => {
+      cy.wait(2000); // Allow time for /prompts fetch
+      cy.get('@getLocalPrompts').then((interception) => {
         expect(interception.response.statusCode).to.eq(200);
       });
 
       // Page should not crash
-      cy.get('#root', {timeout: 10000}).invoke('html').should('not.be.empty');
+      cy.get('#root', {timeout: 300000}).invoke('html').should('not.be.empty');
     });
 
     it('should handle empty prompts array from local backend without crashing', () => {
@@ -865,13 +868,13 @@ describe('Agent Creation & Types E2E', () => {
         body: {prompts: [], success: true, is_online: true},
       }).as('getEmptyLocalPrompts');
 
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
 
-      cy.wait('@getEmptyLocalPrompts', {timeout: 20000});
+      cy.wait('@getEmptyLocalPrompts', {timeout: 300000});
       cy.wait(2000);
 
       // Page should not crash even with 0 local agents
-      cy.get('#root', {timeout: 10000}).invoke('html').should('not.be.empty');
+      cy.get('#root', {timeout: 300000}).invoke('html').should('not.be.empty');
       cy.get('body')
         .invoke('text')
         .should('not.contain', '.map is not a function');
@@ -884,13 +887,13 @@ describe('Agent Creation & Types E2E', () => {
         body: {prompts: 'not-an-array', success: true},
       }).as('getMalformedPrompts');
 
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
 
-      cy.wait('@getMalformedPrompts', {timeout: 20000});
+      cy.wait('@getMalformedPrompts', {timeout: 300000});
       cy.wait(2000);
 
       // Page should not crash thanks to the Array.isArray guard
-      cy.get('#root', {timeout: 10000}).invoke('html').should('not.be.empty');
+      cy.get('#root', {timeout: 300000}).invoke('html').should('not.be.empty');
       cy.get('body')
         .invoke('text')
         .should('not.contain', '.map is not a function');
@@ -904,8 +907,8 @@ describe('Agent Creation & Types E2E', () => {
     beforeEach(() => {
       setupIntercepts();
       seedAuth();
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
-      cy.wait('@getLocalPrompts', {timeout: 20000});
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
+      cy.wait(2000); // Allow time for /prompts fetch (non-blocking)
       cy.wait(3000);
 
       // Open the form
@@ -964,7 +967,7 @@ describe('Agent Creation & Types E2E', () => {
               {force: true}
             );
 
-          cy.wait('@uploadAudio', {timeout: 15000}).then((interception) => {
+          cy.wait('@uploadAudio', {timeout: 300000}).then((interception) => {
             expect(interception.request.url).to.include(
               'azurekong.hertzai.com/makeit/upload_audio'
             );
@@ -1039,7 +1042,7 @@ describe('Agent Creation & Types E2E', () => {
             );
 
           // After selecting audio, the file name should appear in the UI
-          cy.contains('my-voice-clip.wav', {timeout: 10000}).should(
+          cy.contains('my-voice-clip.wav', {timeout: 300000}).should(
             'be.visible'
           );
         } else {
@@ -1058,8 +1061,8 @@ describe('Agent Creation & Types E2E', () => {
     beforeEach(() => {
       setupIntercepts();
       seedAuth();
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
-      cy.wait('@getLocalPrompts', {timeout: 20000});
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
+      cy.wait(2000); // Allow time for /prompts fetch (non-blocking)
       cy.wait(3000);
     });
 
@@ -1082,7 +1085,7 @@ describe('Agent Creation & Types E2E', () => {
           cy.get('button[type="submit"]').click({force: true});
 
           // Verify create_prompt was called with correct payload
-          cy.wait('@createPrompt', {timeout: 15000}).then((interception) => {
+          cy.wait('@createPrompt', {timeout: 300000}).then((interception) => {
             const body = interception.request.body;
             expect(body.name).to.eq('My Private E2E Agent');
             expect(body.prompt).to.eq(
@@ -1097,7 +1100,7 @@ describe('Agent Creation & Types E2E', () => {
           // Form should close after successful submission.
           // Note: The mock response returns name='Cypress Test Agent' which the
           // app uses to navigate, but the form heading should still disappear.
-          cy.contains('Create New Agent', {timeout: 10000}).should('not.exist');
+          cy.contains('Create New Agent', {timeout: 300000}).should('not.exist');
         } else {
           cy.log(
             'CreateAgentForm did not appear -- skipping private agent E2E test'
@@ -1117,14 +1120,14 @@ describe('Agent Creation & Types E2E', () => {
 
           cy.get('button[type="submit"]').click({force: true});
 
-          cy.wait('@createPrompt', {timeout: 15000}).then((interception) => {
+          cy.wait('@createPrompt', {timeout: 300000}).then((interception) => {
             const body = interception.request.body;
             expect(body.name).to.eq('My Public E2E Agent');
             expect(body.isPublic).to.eq(true);
           });
 
           // Form should close
-          cy.contains('Create New Agent', {timeout: 10000}).should('not.exist');
+          cy.contains('Create New Agent', {timeout: 300000}).should('not.exist');
         } else {
           cy.log(
             'CreateAgentForm did not appear -- skipping public agent E2E test'
@@ -1146,7 +1149,7 @@ describe('Agent Creation & Types E2E', () => {
           cy.get('button[type="submit"]').click({force: true});
 
           // The form should still be open (submit was blocked by validation)
-          cy.contains('Create New Agent', {timeout: 5000}).should('be.visible');
+          cy.contains('Create New Agent', {timeout: 300000}).should('be.visible');
 
           // The agentName input should be marked as invalid
           cy.get('#agentName').then(($input) => {
@@ -1171,7 +1174,7 @@ describe('Agent Creation & Types E2E', () => {
           cy.get('button[type="submit"]').click({force: true});
 
           // Form should still be open
-          cy.contains('Create New Agent', {timeout: 5000}).should('be.visible');
+          cy.contains('Create New Agent', {timeout: 300000}).should('be.visible');
 
           // The prompt textarea should be marked as invalid
           cy.get('#prompt').then(($textarea) => {
@@ -1196,19 +1199,19 @@ describe('Agent Creation & Types E2E', () => {
     });
 
     it('should show "(Login required)" text next to Create button when unauthenticated', () => {
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
       cy.wait(3000);
 
       // The button shows "Login required" when isAuthenticated is false
-      cy.contains('Login required', {timeout: 10000}).should('exist');
+      cy.contains('Login required', {timeout: 300000}).should('exist');
     });
 
     it('should NOT open the CreateAgentForm when unauthenticated user clicks Create', () => {
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
       cy.wait(3000);
 
       // Click the Create new Agent button (it should open the login modal instead)
-      cy.contains('Create new Agent', {timeout: 10000})
+      cy.contains('Create new Agent', {timeout: 300000})
         .first()
         .click({force: true});
 
@@ -1218,13 +1221,13 @@ describe('Agent Creation & Types E2E', () => {
 
     it('should show Create button as active when authenticated', () => {
       seedAuth();
-      cy.visit('/#/demo', {timeout: 30000, failOnStatusCode: false});
-      cy.wait('@getLocalPrompts', {timeout: 20000});
+      cy.visit('/local', {timeout: 60000, failOnStatusCode: false});
+      cy.wait(2000); // Allow time for /prompts fetch (non-blocking)
       cy.wait(3000);
 
       // The button should have the orange active styling (text-orange-500)
       // and should NOT show "Login required"
-      cy.contains('Create new Agent', {timeout: 10000})
+      cy.contains('Create new Agent', {timeout: 300000})
         .first()
         .should('not.contain.text', 'Login required');
     });

@@ -25,6 +25,7 @@ import {animateScroll as scrollLibrary} from 'react-scroll';
 
 import autobahn from 'autobahn';
 import { classifyError, getBackoff, makeMsgId } from '../utils/chatRetry';
+import VoiceVisualizer from '../components/VoiceVisualizer';
 import { decrypt, encrypt } from '../utils/encryption';
 import { logger } from '../utils/logger';
 
@@ -782,23 +783,10 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
     fetchPrompts();
   }, [agentData, decryptedUserId, agentRetryTrigger]);
 
-  // Post-HART welcome: greet user by HART name in the chat after first load
-  const hartGreetedRef = useRef(false);
-  useEffect(() => {
-    if (hartGreetedRef.current) return;
-    const hartName = localStorage.getItem('hart_name');
-    const hartSealed = localStorage.getItem('hart_sealed');
-    const hartGreeted = sessionStorage.getItem('hart_greeted');
-    if (hartSealed && hartName && !hartGreeted && messages.length === 0) {
-      hartGreetedRef.current = true;
-      sessionStorage.setItem('hart_greeted', 'true');
-      const emoji = localStorage.getItem('hart_emoji') || '';
-      setMessages([{
-        type: 'assistant',
-        content: `${emoji} Welcome, @${hartName}! I'm your personal agent. Ask me anything or tell me what you'd like to build.`,
-      }]);
-    }
-  }, [messages.length]);
+  // HART welcome: previously injected a fake assistant message which prevented
+  // the empty-state welcome view (agent name + starter chips) from showing.
+  // Removed — the default agent now shows the same clean welcome view as all
+  // other agents. The HART name is displayed in the agent heading instead.
 
   // Proactive LLM status check — diagnose hardware + software state and act accordingly
   // Handles: GPU binary w/o GPU, CPU binary w/ GPU, GPU occupied, model too big,
@@ -3377,7 +3365,7 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
             <div
               className={`${
                 !uploadedImage && !uploadedPdf && window.innerWidth > 768
-                  ? (isTextMode || (!videoUrl && !audioUrl) ? 'w-0 overflow-hidden' : 'w-[30%]')
+                  ? (isTextMode || (!videoUrl && !audioUrl) ? 'w-0 overflow-hidden' : (videoUrl ? 'w-[30%]' : 'w-0 overflow-hidden'))
                   : 'w-full'
               } ${
                 window.innerWidth <= 768 ? (isTextMode || (!videoUrl && !audioUrl) ? '' : 'h-[35vh] mb-4') : ''
@@ -3406,26 +3394,21 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
                           onError={handleVideoError}
                         />
                       ) : audioUrl ? (
-                        <div className="fixed flex flex-col justify-center items-center  p-4">
-                          <div className="flex items-center space-x-4 justify-center mt-5 px-4 py-4">
-                            <div className="w-16 h-16 rounded-full bg-gray-200 flex items-center justify-center">
-                              <button className="text-gray-700 text-xl">
-                                ▶️
-                              </button>
-                            </div>
-                          </div>
-                          <div className="mt-4 w-full max-w-md">
-                            <audio
-                              ref={audioRef}
-                              src={audioUrl}
-                              className="w-full"
-                              autoPlay
-                              controlsList="nodownload noplaybackrate"
-                              controls={false}
-                              onLoadedMetadata={handleLoadedMetadataaudio}
-                              onEnded={handleMediaEnded}
-                            />
-                          </div>
+                        <div className="fixed bottom-24 right-4 z-50 flex flex-col items-center">
+                          <VoiceVisualizer
+                            audioRef={audioRef}
+                            isActive={isPlayingResponse}
+                            size={120}
+                          />
+                          <audio
+                            ref={audioRef}
+                            src={audioUrl}
+                            autoPlay
+                            controlsList="nodownload noplaybackrate"
+                            controls={false}
+                            onLoadedMetadata={handleLoadedMetadataaudio}
+                            onEnded={handleMediaEnded}
+                          />
                         </div>
                       ) : null}
                     </>
@@ -3522,7 +3505,7 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
 
             <div
               className={`flex-1 w-full ${
-                !isTextMode && (videoUrl || audioUrl) && !uploadedImage && !uploadedPdf && window.innerWidth > 768
+                !isTextMode && videoUrl && !uploadedImage && !uploadedPdf && window.innerWidth > 768
                   ? 'md:w-[60%]'
                   : 'md:w-full'
               } overflow-x-clip pt-10 md:pt-0`}

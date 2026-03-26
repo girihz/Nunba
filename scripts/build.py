@@ -37,13 +37,13 @@ Developer Setup — Clone repos (sibling directories):
     locally, it falls back to pip install from GitHub (requires git credentials
     for private repos).
 """
-import os
-import sys
-import shutil
-import subprocess
 import argparse
+import os
 import platform as plat
 import re
+import shutil
+import subprocess
+import sys
 
 # Force unbuffered output so build logs appear in real time (not held until exit).
 # Critical when running from IDEs, CI, or piped environments.
@@ -303,7 +303,7 @@ def _fix_crossbarhttp(python_exe):
     init_py = os.path.join(site_pkgs, 'crossbarhttp', '__init__.py')
     if not os.path.exists(init_py):
         return
-    with open(init_py, 'r') as f:
+    with open(init_py) as f:
         content = f.read()
     old = 'from crossbarhttp import ('
     new = 'from .crossbarhttp import ('
@@ -324,7 +324,7 @@ def _stamp_version_in_file(filepath, pattern, replacement):
     if not os.path.exists(filepath):
         print_warn(f"Cannot stamp version: {filepath} not found")
         return False
-    with open(filepath, 'r', encoding='utf-8') as f:
+    with open(filepath, encoding='utf-8') as f:
         content = f.read()
     new_content = re.sub(pattern, replacement, content)
     if new_content != content:
@@ -568,7 +568,7 @@ def run_setup_wizard(python_exe, dsn=None):
 
     # If DSN provided via command line, set it directly
     if dsn:
-        print_info(f"Setting Sentry DSN from command line...")
+        print_info("Setting Sentry DSN from command line...")
         result = subprocess.run(
             [python_exe, os.path.join('desktop', 'setup_wizard.py'), '--dsn', dsn],
             capture_output=True, text=True
@@ -681,7 +681,7 @@ def slim_python_embed():
     # Remove .pth files that reference dev machine paths
     for f in _glob.glob(os.path.join(site_packages, '*.pth')):
         try:
-            with open(f, 'r') as fh:
+            with open(f) as fh:
                 content = fh.read()
             if '__editable__' in content or 'PycharmProjects' in content:
                 os.remove(f)
@@ -816,7 +816,7 @@ def build_windows(python_exe, app_only=False, installer_only=False):
 
     print_info(f"Build successful: {exe_path}")
 
-    # ── Sync HARTOS source into python-embed ──────────────────────────
+    # -- Sync HARTOS source into python-embed --
     # The source python-embed/ is a snapshot that may contain stale HARTOS
     # files from a previous build. cx_Freeze copies modules via include_files
     # but the post-build copytree from python-embed/ can overwrite them.
@@ -975,6 +975,39 @@ def build_macos(python_exe, app_only=False, installer_only=False):
         exe_path = os.path.join(app_path, 'Contents', 'MacOS', 'Nunba')
         if os.path.exists(exe_path):
             os.chmod(exe_path, 0o755)
+
+        # -- Copy tcl/tk scripts to Contents/Resources/share/ --
+        # cx_Freeze puts tcl/tk in Contents/MacOS/share/ but _tkinter looks in
+        # Contents/Resources/share/ on macOS.  Copy so tkinter finds init.tcl.
+        _macos_share = os.path.join(app_path, 'Contents', 'MacOS', 'share')
+        _resources_share = os.path.join(app_path, 'Contents', 'Resources', 'share')
+        if os.path.isdir(_macos_share) and not os.path.isdir(_resources_share):
+            shutil.copytree(_macos_share, _resources_share)
+            print_info("Copied tcl/tk scripts to Contents/Resources/share/")
+
+        # -- Thin universal binaries to arm64 on Apple Silicon --
+        # cx_Freeze bundles a universal Python executable but .so extensions are
+        # arm64-only.  If the OS picks the x86_64 slice the .so files fail to
+        # load.  Thinning both the launcher and libPython forces arm64.
+        import platform as _plat
+        import tempfile
+        if _plat.machine() == 'arm64' and shutil.which('lipo'):
+            _python_lib = os.path.join(app_path, 'Contents', 'MacOS', 'lib', 'Python')
+            for _bin in [exe_path, _python_lib]:
+                if not os.path.exists(_bin):
+                    continue
+                try:
+                    _arch_out = subprocess.check_output(['lipo', '-archs', _bin], text=True).strip()
+                    if 'x86_64' in _arch_out and 'arm64' in _arch_out:
+                        _tmp = os.path.join(tempfile.gettempdir(), os.path.basename(_bin) + '.arm64')
+                        subprocess.run(['lipo', _bin, '-thin', 'arm64', '-output', _tmp], check=True)
+                        # Sign in temp location (avoids codesign treating it as bundle root)
+                        subprocess.run(['codesign', '--force', '--sign', '-', _tmp], check=True)
+                        os.replace(_tmp, _bin)
+                        os.chmod(_bin, 0o755)
+                        print_info(f"Thinned to arm64 + re-signed: {os.path.basename(_bin)}")
+                except Exception as _e:
+                    print_warn(f"lipo thin failed for {os.path.basename(_bin)}: {_e}")
 
         print_info(f"Build successful: {app_path}")
 
@@ -1225,7 +1258,6 @@ def build_linux(python_exe, app_only=False, installer_only=False):
         _hv_sp = os.path.join('build', 'Nunba', 'python-embed', 'Lib', 'site-packages')
         # Also check Linux-style path
         if not os.path.isdir(_hv_sp):
-            import sysconfig
             _pyver = f"python{sys.version_info.major}.{sys.version_info.minor}"
             _hv_sp = os.path.join('build', 'Nunba', 'python-embed', 'lib', _pyver, 'site-packages')
         _hv_dir = os.path.join(_hv_sp, 'hevolveai')
@@ -1308,8 +1340,8 @@ def print_summary():
             print(f"  Installer:  {installer_path} ({size} MB)")
 
         print("=" * 60)
-        print(f"\n  To test:    build\\Nunba\\Nunba.exe")
-        print(f"  To install: Output\\Nunba_Setup.exe")
+        print("\n  To test:    build\\Nunba\\Nunba.exe")
+        print("  To install: Output\\Nunba_Setup.exe")
 
     elif IS_MACOS:
         app_path = os.path.join('build', 'Nunba.app')
@@ -1330,8 +1362,8 @@ def print_summary():
             print(f"  Installer:   {dmg_path} ({size} MB)")
 
         print("=" * 60)
-        print(f"\n  To test:    open build/Nunba.app")
-        print(f"  To install: open Output/Nunba_Setup.dmg")
+        print("\n  To test:    open build/Nunba.app")
+        print("  To install: open Output/Nunba_Setup.dmg")
 
     elif IS_LINUX:
         exe_path = os.path.join('build', 'Nunba', 'Nunba')
@@ -1350,10 +1382,10 @@ def print_summary():
             print(f"  AppImage:   {latest} ({size} MB)")
 
         print("=" * 60)
-        print(f"\n  To test:    ./build/Nunba/Nunba")
+        print("\n  To test:    ./build/Nunba/Nunba")
         if appimages:
-            print(f"  To install: ./deploy/linux/install.sh")
-        print(f"\n  Requirements: GTK 3.0, WebKit2GTK 4.0")
+            print("  To install: ./deploy/linux/install.sh")
+        print("\n  Requirements: GTK 3.0, WebKit2GTK 4.0")
 
 
 def main():
