@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>HART Voice Visualizer</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0A0914; display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100vh; font-family:-apple-system,sans-serif; color:#e0e0e0; overflow:hidden; }
+h1 { color:#6C63FF; margin-bottom:6px; font-size:18px; font-weight:300; letter-spacing:2px; }
+.sub { color:#444; margin-bottom:20px; font-size:11px; letter-spacing:1px; }
+#wrap { position:relative; filter:drop-shadow(0 0 40px rgba(108,99,255,0.3)); }
+canvas { border-radius:50%; }
+.controls { margin-top:28px; display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+button { background:rgba(108,99,255,0.1); border:1px solid rgba(108,99,255,0.25); color:#8B85D0; padding:7px 14px; border-radius:20px; cursor:pointer; font-size:11px; transition:all 0.3s; letter-spacing:0.5px; }
+button:hover { background:rgba(108,99,255,0.25); border-color:#6C63FF; color:#B0ABFF; transform:scale(1.05); }
+button.active { background:linear-gradient(135deg,#6C63FF,#B43CE6); color:#fff; border-color:transparent; box-shadow:0 0 20px rgba(108,99,255,0.4); }
+.lbl { position:absolute; bottom:-16px; left:50%; transform:translateX(-50%); font-size:8px; letter-spacing:4px; text-transform:uppercase; font-weight:700; background:linear-gradient(90deg,#6C63FF,#00D2FF,#B43CE6); -webkit-background-clip:text; -webkit-text-fill-color:transparent; animation:pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%,100%{opacity:.6;filter:brightness(1)} 50%{opacity:1;filter:brightness(1.6)} }
+</style>
+</head><body>
+<h1>H A R T &nbsp; V O I C E</h1>
+<div class="sub">Neon Circular Amplitude</div>
+<div id="wrap">
+  <canvas id="c" width="600" height="600" style="width:300px;height:300px"></canvas>
+  <div class="lbl" id="lbl" style="display:none">Speaking</div>
+</div>
+<audio id="a" crossorigin="anonymous"></audio>
+<div class="controls">
+  <button onclick="play('hart-voices/en/greeting.ogg',this)">Greeting</button>
+  <button onclick="play('hart-voices/en/ack_music_art.ogg',this)">Music & Art</button>
+  <button onclick="play('hart-voices/en/ack_building_coding.ogg',this)">Coding</button>
+  <button onclick="play('hart-voices/en/ack_nature_movement.ogg',this)">Nature</button>
+  <button onclick="play('hart-voices/en/ack_games_strategy.ogg',this)">Games</button>
+  <button onclick="play('hart-voices/en/reveal_intro.ogg',this)">Reveal</button>
+  <button onclick="play('hart-voices/en/post_reveal.ogg',this)">Post Reveal</button>
+  <button onclick="stop()">&#x25A0; Stop</button>
+</div>
+
+<script>
+const C = document.getElementById('c'), X = C.getContext('2d');
+const au = document.getElementById('a'), lbl = document.getElementById('lbl');
+const W = C.width, H = C.height, cx = W/2, cy = H/2, R = Math.min(cx,cy)*0.88;
+let actx, an, src, on = false, t = 0;
+
+// Smoothed amplitude bands (lerped each frame)
+const BANDS = 128;
+const smooth = new Float32Array(BANDS);   // current smoothed values
+const target = new Float32Array(BANDS);   // target from FFT
+const prev   = new Float32Array(BANDS);   // previous frame
+
+// Particles
+const P = [];
+for (let i = 0; i < 80; i++) P.push({
+  a: Math.random()*Math.PI*2, r: 0.35+Math.random()*0.55,
+  s: 0.001+Math.random()*0.003, sz: 0.3+Math.random()*1.2,
+  br: 0.2+Math.random()*0.6, h: Math.random()*80-40
+});
+
+function conn() {
+  if (src) return;
+  actx = new (window.AudioContext||window.webkitAudioContext)();
+  an = actx.createAnalyser(); an.fftSize = 1024; an.smoothingTimeConstant = 0.88;
+  src = actx.createMediaElementSource(au);
+  src.connect(an); an.connect(actx.destination);
+}
+function play(u, btn) {
+  au.src = u; conn();
+  if (actx.state==='suspended') actx.resume();
+  au.play(); on = true; lbl.style.display = 'block';
+  document.querySelectorAll('button').forEach(b=>b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+}
+function stop() {
+  au.pause(); au.currentTime=0; on=false; lbl.style.display='none';
+  document.querySelectorAll('button').forEach(b=>b.classList.remove('active'));
+}
+au.onended = stop;
+
+const freq = new Uint8Array(512);
+const wave = new Uint8Array(512);
+
+// Cubic interpolation for butter-smooth curves
+function catmull(p0,p1,p2,p3,t) {
+  const t2=t*t, t3=t2*t;
+  return 0.5*(2*p1+(p2-p0)*t+(2*p0-5*p1+4*p2-p3)*t2+(-p0+3*p1-3*p2+p3)*t3);
+}
+
+// Get smoothly interpolated value at any angle position
+function getSmooth(arr, pos) {
+  const len = arr.length;
+  const i = pos * len;
+  const i0 = ((Math.floor(i)-1)%len+len)%len;
+  const i1 = Math.floor(i)%len;
+  const i2 = (Math.floor(i)+1)%len;
+  const i3 = (Math.floor(i)+2)%len;
+  return catmull(arr[i0],arr[i1],arr[i2],arr[i3],i-Math.floor(i));
+}
+
+function draw() {
+  requestAnimationFrame(draw);
+  t += 0.012;
+
+  if (on && an) {
+    an.getByteFrequencyData(freq);
+    an.getByteTimeDomainData(wave);
+    // Map FFT to bands with log-scale grouping (more low-freq detail)
+    for (let i = 0; i < BANDS; i++) {
+      const frac = i / BANDS;
+      // Log-scale: more bins for bass, fewer for treble
+      const fi = Math.floor(Math.pow(frac, 1.5) * (freq.length * 0.8));
+      // Average a small neighborhood for stability
+      let sum = 0, count = 0;
+      for (let j = Math.max(0, fi-2); j <= Math.min(freq.length-1, fi+2); j++) {
+        sum += freq[j]; count++;
+      }
+      target[i] = (sum / count) / 255;
+    }
+  } else if (on) {
+    // Synthetic
+    for (let i = 0; i < BANDS; i++) {
+      target[i] = 0.3 + 0.5 * Math.abs(
+        Math.sin(t*1.8+i*0.12) * Math.cos(t*0.9+i*0.06) * Math.sin(t*0.5+i*0.2)
+      );
+    }
+  } else {
+    for (let i = 0; i < BANDS; i++) target[i] *= 0.92;
+  }
+
+  // Butter-smooth lerp: current → target
+  const lerpSpeed = on ? 0.18 : 0.06;
+  for (let i = 0; i < BANDS; i++) {
+    smooth[i] += (target[i] - smooth[i]) * lerpSpeed;
+  }
+
+  const bass = avg(smooth,0,16);
+  const mid = avg(smooth,16,64);
+  const hi = avg(smooth,64,BANDS);
+  const lvl = bass*0.5 + mid*0.35 + hi*0.15;
+
+  // ── Clear ──
+  X.globalCompositeOperation = 'source-over';
+  X.fillStyle = `rgba(10,9,20,${on ? 0.18 : 0.06})`;
+  X.fillRect(0,0,W,H);
+
+  if (!on && lvl < 0.01) {
+    drawIdle(); return;
+  }
+
+  // ── Deep halo ──
+  const hr = R*(0.9+lvl*0.3);
+  const hg = X.createRadialGradient(cx,cy,0,cx,cy,hr);
+  hg.addColorStop(0,`rgba(108,99,255,${0.04+lvl*0.06})`);
+  hg.addColorStop(0.5,`rgba(80,40,200,${0.02+lvl*0.03})`);
+  hg.addColorStop(1,'rgba(10,9,20,0)');
+  X.fillStyle=hg; X.beginPath(); X.arc(cx,cy,hr,0,Math.PI*2); X.fill();
+
+  X.globalCompositeOperation = 'lighter';
+
+  // ── Main amplitude ring — THE HERO ──
+  // Smooth circular deformation driven by audio
+  drawNeonRing(0.6, 0.18, [108,99,255], 3, 35, 1.0, lvl);
+  drawNeonRing(0.48, 0.10, [0,210,255], 2, 22, -0.6, lvl);
+  drawNeonRing(0.72, 0.14, [160,50,255], 2.2, 28, 0.4, lvl);
+
+  // ── Inner waveform blob ──
+  if (on && an) {
+    const wr = R*0.28;
+    X.beginPath();
+    const pts = 200;
+    for (let i = 0; i <= pts; i++) {
+      const a = (i/pts)*Math.PI*2;
+      const wi = Math.floor((i/pts)*wave.length) % wave.length;
+      const v = (wave[wi]-128)/128;
+      const r = wr + v*R*0.06;
+      const x = cx+Math.cos(a)*r, y = cy+Math.sin(a)*r;
+      i===0 ? X.moveTo(x,y) : X.lineTo(x,y);
+    }
+    X.closePath();
+    X.strokeStyle = `rgba(255,107,107,${0.25+lvl*0.4})`;
+    X.lineWidth = 1.2;
+    X.shadowBlur = 10+lvl*12;
+    X.shadowColor = `rgba(255,107,107,${0.4+lvl*0.3})`;
+    X.stroke();
+  }
+
+  // ── Particles ──
+  X.shadowBlur = 0;
+  for (const p of P) {
+    p.a += p.s*(1+lvl*3);
+    const pr = R*p.r*(0.85+lvl*0.25);
+    const px = cx+Math.cos(p.a)*pr, py = cy+Math.sin(p.a)*pr;
+    const al = p.br*(0.15+lvl*0.6);
+    const sz = p.sz*(0.8+lvl*1.5);
+    const cr = Math.max(0,Math.min(255, 160+p.h));
+    const cg = Math.max(0,Math.min(255, 140+p.h*0.5));
+    X.fillStyle = `rgba(${cr},${cg},255,${al})`;
+    X.shadowBlur = sz*5;
+    X.shadowColor = `rgba(108,99,255,${al*0.6})`;
+    X.beginPath(); X.arc(px,py,sz,0,Math.PI*2); X.fill();
+  }
+
+  // ── Center core ──
+  X.globalCompositeOperation = 'source-over';
+  X.shadowBlur = 0;
+  const cr = R*0.15*(1+lvl*0.6+Math.sin(t*2.5)*0.03);
+  // Outer bloom
+  const cg1 = X.createRadialGradient(cx,cy,0,cx,cy,cr*3);
+  cg1.addColorStop(0,`rgba(108,99,255,${0.08+lvl*0.12})`);
+  cg1.addColorStop(1,'rgba(108,99,255,0)');
+  X.fillStyle=cg1; X.beginPath(); X.arc(cx,cy,cr*3,0,Math.PI*2); X.fill();
+  // Core
+  const cg2 = X.createRadialGradient(cx,cy,0,cx,cy,cr);
+  cg2.addColorStop(0,`rgba(220,215,255,${0.5+lvl*0.5})`);
+  cg2.addColorStop(0.4,`rgba(108,99,255,${0.3+lvl*0.4})`);
+  cg2.addColorStop(1,'rgba(60,50,180,0)');
+  X.fillStyle=cg2; X.beginPath(); X.arc(cx,cy,cr,0,Math.PI*2); X.fill();
+  // Hot center
+  X.fillStyle=`rgba(255,255,255,${0.3+lvl*0.7})`;
+  X.beginPath(); X.arc(cx,cy,2+lvl*2.5,0,Math.PI*2); X.fill();
+}
+
+function drawNeonRing(radiusFrac, ampFrac, color, lineW, glow, speed, lvl) {
+  const baseR = R * radiusFrac;
+  const amp = R * ampFrac;
+  const pts = 256; // High resolution for smoothness
+  const [cr,cg,cb] = color;
+
+  X.beginPath();
+  for (let i = 0; i <= pts; i++) {
+    const frac = i / pts;
+    const angle = frac * Math.PI * 2;
+
+    // Get smoothly interpolated amplitude at this angle
+    const v = getSmooth(smooth, frac);
+
+    // Multi-frequency organic deformation
+    const deform = v * amp
+      + Math.sin(angle*2 + t*speed) * amp * 0.08 * (1+lvl)
+      + Math.sin(angle*5 + t*speed*1.7) * amp * 0.03
+      + Math.sin(angle*9 + t*speed*0.4) * amp * 0.015;
+
+    const r = baseR + deform;
+    const x = cx + Math.cos(angle) * r;
+    const y = cy + Math.sin(angle) * r;
+    i === 0 ? X.moveTo(x,y) : X.lineTo(x,y);
+  }
+  X.closePath();
+
+  const alpha = 0.4 + lvl*0.6;
+  X.strokeStyle = `rgba(${cr},${cg},${cb},${alpha})`;
+  X.lineWidth = lineW + lvl*1.5;
+  X.shadowBlur = glow + lvl*25;
+  X.shadowColor = `rgba(${cr},${cg},${cb},${0.5+lvl*0.5})`;
+  X.stroke();
+
+  // Second thinner pass for extra glow
+  X.strokeStyle = `rgba(${Math.min(255,cr+40)},${Math.min(255,cg+40)},${Math.min(255,cb+20)},${alpha*0.3})`;
+  X.lineWidth = (lineW + lvl*1.5) * 2.5;
+  X.shadowBlur = glow*2 + lvl*30;
+  X.stroke();
+}
+
+function drawIdle() {
+  X.globalCompositeOperation = 'lighter';
+  const b = 0.5+Math.sin(t)*0.08;
+  // Ring 1
+  X.beginPath(); X.arc(cx,cy,R*b,0,Math.PI*2);
+  X.strokeStyle=`rgba(108,99,255,${0.06+Math.sin(t)*0.03})`;
+  X.lineWidth=1.2; X.shadowBlur=18; X.shadowColor='rgba(108,99,255,0.25)'; X.stroke();
+  // Ring 2
+  X.beginPath(); X.arc(cx,cy,R*b*0.65,0,Math.PI*2);
+  X.strokeStyle=`rgba(0,210,255,${0.04+Math.sin(t*1.2)*0.02})`;
+  X.lineWidth=0.8; X.shadowBlur=12; X.shadowColor='rgba(0,210,255,0.15)'; X.stroke();
+  X.globalCompositeOperation='source-over'; X.shadowBlur=0;
+  // Core
+  const g=X.createRadialGradient(cx,cy,0,cx,cy,R*0.12);
+  g.addColorStop(0,`rgba(108,99,255,${0.1+Math.sin(t)*0.04})`); g.addColorStop(1,'rgba(108,99,255,0)');
+  X.fillStyle=g; X.beginPath(); X.arc(cx,cy,R*0.12,0,Math.PI*2); X.fill();
+  X.fillStyle=`rgba(180,175,255,${0.2+Math.sin(t)*0.08})`; X.beginPath(); X.arc(cx,cy,2.5,0,Math.PI*2); X.fill();
+}
+
+function avg(arr,s,e) { let sum=0; for(let i=s;i<e;i++) sum+=arr[i]; return (e-s)>0?sum/(e-s):0; }
+
+draw();
+</script>
+</body></html>
