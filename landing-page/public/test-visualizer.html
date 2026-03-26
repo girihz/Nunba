@@ -1,284 +1,227 @@
 <!DOCTYPE html>
-<html><head><meta charset="utf-8">
-<title>HART Voice Visualizer</title>
+<html><head><meta charset="utf-8"><title>HART Voice</title>
 <style>
-* { margin:0; padding:0; box-sizing:border-box; }
-body { background:#0A0914; display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100vh; font-family:-apple-system,sans-serif; color:#e0e0e0; overflow:hidden; }
-h1 { color:#6C63FF; margin-bottom:6px; font-size:18px; font-weight:300; letter-spacing:2px; }
-.sub { color:#444; margin-bottom:20px; font-size:11px; letter-spacing:1px; }
-#wrap { position:relative; filter:drop-shadow(0 0 40px rgba(108,99,255,0.3)); }
-canvas { border-radius:50%; }
-.controls { margin-top:28px; display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
-button { background:rgba(108,99,255,0.1); border:1px solid rgba(108,99,255,0.25); color:#8B85D0; padding:7px 14px; border-radius:20px; cursor:pointer; font-size:11px; transition:all 0.3s; letter-spacing:0.5px; }
-button:hover { background:rgba(108,99,255,0.25); border-color:#6C63FF; color:#B0ABFF; transform:scale(1.05); }
-button.active { background:linear-gradient(135deg,#6C63FF,#B43CE6); color:#fff; border-color:transparent; box-shadow:0 0 20px rgba(108,99,255,0.4); }
-.lbl { position:absolute; bottom:-16px; left:50%; transform:translateX(-50%); font-size:8px; letter-spacing:4px; text-transform:uppercase; font-weight:700; background:linear-gradient(90deg,#6C63FF,#00D2FF,#B43CE6); -webkit-background-clip:text; -webkit-text-fill-color:transparent; animation:pulse 2s ease-in-out infinite; }
-@keyframes pulse { 0%,100%{opacity:.6;filter:brightness(1)} 50%{opacity:1;filter:brightness(1.6)} }
+*{margin:0;padding:0}
+body{background:#0A0914;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:system-ui;color:#ccc}
+canvas{background:#0A0914;margin-bottom:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:8px}
+.row button{background:#1a1a2e;border:1px solid #333;color:#aaa;padding:6px 14px;border-radius:14px;cursor:pointer;font-size:11px}
+.row button:hover{border-color:#6C63FF;color:#ddd}
+.row button.on{background:#6C63FF;color:#fff;border-color:#6C63FF}
+#status{font-size:10px;color:#555;letter-spacing:2px;text-transform:uppercase;height:14px}
 </style>
-</head><body>
-<h1>H A R T &nbsp; V O I C E</h1>
-<div class="sub">Neon Circular Amplitude</div>
-<div id="wrap">
-  <canvas id="c" width="600" height="600" style="width:300px;height:300px"></canvas>
-  <div class="lbl" id="lbl" style="display:none">Speaking</div>
-</div>
-<audio id="a" crossorigin="anonymous"></audio>
-<div class="controls">
+</head>
+<body>
+<canvas id="viz" width="400" height="400" style="width:300px;height:300px"></canvas>
+<div id="status"></div>
+<div class="row">
   <button onclick="play('hart-voices/en/greeting.ogg',this)">Greeting</button>
-  <button onclick="play('hart-voices/en/ack_music_art.ogg',this)">Music & Art</button>
-  <button onclick="play('hart-voices/en/ack_building_coding.ogg',this)">Coding</button>
+  <button onclick="play('hart-voices/en/ack_music_art.ogg',this)">Music</button>
+  <button onclick="play('hart-voices/en/ack_building_coding.ogg',this)">Code</button>
   <button onclick="play('hart-voices/en/ack_nature_movement.ogg',this)">Nature</button>
   <button onclick="play('hart-voices/en/ack_games_strategy.ogg',this)">Games</button>
   <button onclick="play('hart-voices/en/reveal_intro.ogg',this)">Reveal</button>
-  <button onclick="play('hart-voices/en/post_reveal.ogg',this)">Post Reveal</button>
-  <button onclick="stop()">&#x25A0; Stop</button>
+  <button onclick="stop()">Stop</button>
 </div>
-
+<audio id="audio" crossorigin="anonymous"></audio>
 <script>
-const C = document.getElementById('c'), X = C.getContext('2d');
-const au = document.getElementById('a'), lbl = document.getElementById('lbl');
-const W = C.width, H = C.height, cx = W/2, cy = H/2, R = Math.min(cx,cy)*0.88;
-let actx, an, src, on = false, t = 0;
+var canvas = document.getElementById('viz');
+var ctx = canvas.getContext('2d');
+var audio = document.getElementById('audio');
+var statusEl = document.getElementById('status');
+var W = canvas.width, H = canvas.height;
+var cx = W / 2, cy = H / 2;
+var audioCtx = null, analyser = null, source = null;
+var isPlaying = false, time = 0;
+var freqData = null;
 
-// Smoothed amplitude bands (lerped each frame)
-const BANDS = 128;
-const smooth = new Float32Array(BANDS);   // current smoothed values
-const target = new Float32Array(BANDS);   // target from FFT
-const prev   = new Float32Array(BANDS);   // previous frame
+var bass = 0, mid = 0, treble = 0;
+var bassCur = 0, midCur = 0, trebleCur = 0;
 
-// Particles
-const P = [];
-for (let i = 0; i < 80; i++) P.push({
-  a: Math.random()*Math.PI*2, r: 0.35+Math.random()*0.55,
-  s: 0.001+Math.random()*0.003, sz: 0.3+Math.random()*1.2,
-  br: 0.2+Math.random()*0.6, h: Math.random()*80-40
-});
-
-function conn() {
-  if (src) return;
-  actx = new (window.AudioContext||window.webkitAudioContext)();
-  an = actx.createAnalyser(); an.fftSize = 1024; an.smoothingTimeConstant = 0.88;
-  src = actx.createMediaElementSource(au);
-  src.connect(an); an.connect(actx.destination);
+function connectAudio() {
+  if (source) return;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.8;
+    source = audioCtx.createMediaElementSource(audio);
+    source.connect(analyser);
+    analyser.connect(audioCtx.destination);
+    freqData = new Uint8Array(analyser.frequencyBinCount);
+  } catch(e) {}
 }
-function play(u, btn) {
-  au.src = u; conn();
-  if (actx.state==='suspended') actx.resume();
-  au.play(); on = true; lbl.style.display = 'block';
-  document.querySelectorAll('button').forEach(b=>b.classList.remove('active'));
-  if (btn) btn.classList.add('active');
+
+function play(src, btn) {
+  audio.src = src; connectAudio();
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  audio.play(); isPlaying = true; statusEl.textContent = 'speaking';
+  var btns = document.querySelectorAll('.row button');
+  for (var i = 0; i < btns.length; i++) btns[i].classList.remove('on');
+  if (btn) btn.classList.add('on');
 }
 function stop() {
-  au.pause(); au.currentTime=0; on=false; lbl.style.display='none';
-  document.querySelectorAll('button').forEach(b=>b.classList.remove('active'));
+  audio.pause(); audio.currentTime = 0; isPlaying = false; statusEl.textContent = '';
+  var btns = document.querySelectorAll('.row button');
+  for (var i = 0; i < btns.length; i++) btns[i].classList.remove('on');
 }
-au.onended = stop;
+audio.addEventListener('ended', stop);
 
-const freq = new Uint8Array(512);
-const wave = new Uint8Array(512);
+var PTS = 180;
+var outerR = new Float32Array(PTS + 1);
 
-// Cubic interpolation for butter-smooth curves
-function catmull(p0,p1,p2,p3,t) {
-  const t2=t*t, t3=t2*t;
-  return 0.5*(2*p1+(p2-p0)*t+(2*p0-5*p1+4*p2-p3)*t2+(-p0+3*p1-3*p2+p3)*t3);
-}
+function render() {
+  requestAnimationFrame(render);
+  time += 0.02;
 
-// Get smoothly interpolated value at any angle position
-function getSmooth(arr, pos) {
-  const len = arr.length;
-  const i = pos * len;
-  const i0 = ((Math.floor(i)-1)%len+len)%len;
-  const i1 = Math.floor(i)%len;
-  const i2 = (Math.floor(i)+1)%len;
-  const i3 = (Math.floor(i)+2)%len;
-  return catmull(arr[i0],arr[i1],arr[i2],arr[i3],i-Math.floor(i));
-}
-
-function draw() {
-  requestAnimationFrame(draw);
-  t += 0.012;
-
-  if (on && an) {
-    an.getByteFrequencyData(freq);
-    an.getByteTimeDomainData(wave);
-    // Map FFT to bands with log-scale grouping (more low-freq detail)
-    for (let i = 0; i < BANDS; i++) {
-      const frac = i / BANDS;
-      // Log-scale: more bins for bass, fewer for treble
-      const fi = Math.floor(Math.pow(frac, 1.5) * (freq.length * 0.8));
-      // Average a small neighborhood for stability
-      let sum = 0, count = 0;
-      for (let j = Math.max(0, fi-2); j <= Math.min(freq.length-1, fi+2); j++) {
-        sum += freq[j]; count++;
-      }
-      target[i] = (sum / count) / 255;
+  if (isPlaying && analyser && freqData) {
+    analyser.getByteFrequencyData(freqData);
+    var bS = 0, mS = 0, tS = 0, len = freqData.length;
+    for (var i = 0; i < len; i++) {
+      if (i < len * 0.15) bS += freqData[i];
+      else if (i < len * 0.5) mS += freqData[i];
+      else tS += freqData[i];
     }
-  } else if (on) {
-    // Synthetic
-    for (let i = 0; i < BANDS; i++) {
-      target[i] = 0.3 + 0.5 * Math.abs(
-        Math.sin(t*1.8+i*0.12) * Math.cos(t*0.9+i*0.06) * Math.sin(t*0.5+i*0.2)
-      );
-    }
+    bass = bS / (len * 0.15) / 255;
+    mid = mS / (len * 0.35) / 255;
+    treble = tS / (len * 0.5) / 255;
   } else {
-    for (let i = 0; i < BANDS; i++) target[i] *= 0.92;
+    bass *= 0.95; mid *= 0.95; treble *= 0.95;
   }
 
-  // Butter-smooth lerp: current → target
-  const lerpSpeed = on ? 0.18 : 0.06;
-  for (let i = 0; i < BANDS; i++) {
-    smooth[i] += (target[i] - smooth[i]) * lerpSpeed;
+  bassCur += (bass - bassCur) * 0.12;
+  midCur += (mid - midCur) * 0.10;
+  trebleCur += (treble - trebleCur) * 0.08;
+  var energy = bassCur * 0.5 + midCur * 0.35 + trebleCur * 0.15;
+
+  ctx.fillStyle = '#0A0914';
+  ctx.fillRect(0, 0, W, H);
+
+  var baseR = 100;
+
+  // Background glow
+  var bg = ctx.createRadialGradient(cx, cy, baseR - 10, cx, cy, baseR + 70);
+  bg.addColorStop(0, 'rgba(108,99,255,' + (0.02 + energy * 0.06).toFixed(3) + ')');
+  bg.addColorStop(1, 'rgba(10,9,20,0)');
+  ctx.fillStyle = bg;
+  ctx.beginPath(); ctx.arc(cx, cy, baseR + 70, 0, Math.PI * 2); ctx.fill();
+
+  // Compute outer ring radius — ALWAYS >= baseR (peaks only go outward)
+  for (var i = 0; i <= PTS; i++) {
+    var a = (i / PTS) * Math.PI * 2;
+    var wave =
+      bassCur   * 55 * Math.sin(2 * a + time * 1.5) +
+      bassCur   * 32 * Math.sin(3 * a - time * 0.8) +
+      midCur    * 40 * Math.sin(4 * a + time * 2.2) +
+      midCur    * 24 * Math.sin(6 * a - time * 1.3) +
+      trebleCur * 28 * Math.sin(8 * a + time * 3.0) +
+      trebleCur * 16 * Math.sin(11 * a - time * 1.8);
+
+    // Smooth rectifier: wave² / (|wave| + softness) — no sharp V at zero crossings
+    // Peaks stay tall, troughs become gentle hills instead of sharp folds
+    var soft = 8;
+    var rectified = (wave * wave) / (Math.abs(wave) + soft);
+    outerR[i] = baseR + rectified;
   }
 
-  const bass = avg(smooth,0,16);
-  const mid = avg(smooth,16,64);
-  const hi = avg(smooth,64,BANDS);
-  const lvl = bass*0.5 + mid*0.35 + hi*0.15;
+  // --- Fill area between base circle and outer ring ---
+  // Draw as one filled shape: outer ring forward, then base circle backward
+  ctx.beginPath();
+  // Outer ring path (clockwise)
+  for (var i = 0; i <= PTS; i++) {
+    var a = (i / PTS) * Math.PI * 2;
+    var x = cx + Math.cos(a) * outerR[i];
+    var y = cy + Math.sin(a) * outerR[i];
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  // Base circle path (counter-clockwise to create the "hole")
+  for (var i = PTS; i >= 0; i--) {
+    var a = (i / PTS) * Math.PI * 2;
+    var x = cx + Math.cos(a) * baseR;
+    var y = cy + Math.sin(a) * baseR;
+    ctx.lineTo(x, y);
+  }
+  ctx.closePath();
 
-  // ── Clear ──
-  X.globalCompositeOperation = 'source-over';
-  X.fillStyle = `rgba(10,9,20,${on ? 0.18 : 0.06})`;
-  X.fillRect(0,0,W,H);
-
-  if (!on && lvl < 0.01) {
-    drawIdle(); return;
+  // Find actual max peak radius this frame
+  var maxPeakR = baseR;
+  for (var i = 0; i <= PTS; i++) {
+    if (outerR[i] > maxPeakR) maxPeakR = outerR[i];
   }
 
-  // ── Deep halo ──
-  const hr = R*(0.9+lvl*0.3);
-  const hg = X.createRadialGradient(cx,cy,0,cx,cy,hr);
-  hg.addColorStop(0,`rgba(108,99,255,${0.04+lvl*0.06})`);
-  hg.addColorStop(0.5,`rgba(80,40,200,${0.02+lvl*0.03})`);
-  hg.addColorStop(1,'rgba(10,9,20,0)');
-  X.fillStyle=hg; X.beginPath(); X.arc(cx,cy,hr,0,Math.PI*2); X.fill();
-
-  X.globalCompositeOperation = 'lighter';
-
-  // ── Main amplitude ring — THE HERO ──
-  // Smooth circular deformation driven by audio
-  drawNeonRing(0.6, 0.18, [108,99,255], 3, 35, 1.0, lvl);
-  drawNeonRing(0.48, 0.10, [0,210,255], 2, 22, -0.6, lvl);
-  drawNeonRing(0.72, 0.14, [160,50,255], 2.2, 28, 0.4, lvl);
-
-  // ── Inner waveform blob ──
-  if (on && an) {
-    const wr = R*0.28;
-    X.beginPath();
-    const pts = 200;
-    for (let i = 0; i <= pts; i++) {
-      const a = (i/pts)*Math.PI*2;
-      const wi = Math.floor((i/pts)*wave.length) % wave.length;
-      const v = (wave[wi]-128)/128;
-      const r = wr + v*R*0.06;
-      const x = cx+Math.cos(a)*r, y = cy+Math.sin(a)*r;
-      i===0 ? X.moveTo(x,y) : X.lineTo(x,y);
-    }
-    X.closePath();
-    X.strokeStyle = `rgba(255,107,107,${0.25+lvl*0.4})`;
-    X.lineWidth = 1.2;
-    X.shadowBlur = 10+lvl*12;
-    X.shadowColor = `rgba(255,107,107,${0.4+lvl*0.3})`;
-    X.stroke();
+  // Gradient spans exactly from baseR to maxPeakR
+  // So stop 0 = at the base edge, stop 1 = at the tallest peak tip
+  if (maxPeakR > baseR + 1) {
+    var fillGrad = ctx.createRadialGradient(cx, cy, baseR, cx, cy, maxPeakR);
+    fillGrad.addColorStop(0, 'rgba(10,9,20,0)');
+    fillGrad.addColorStop(0.3, 'rgba(80,60,220,' + (0.08 + energy * 0.15).toFixed(3) + ')');
+    fillGrad.addColorStop(0.7, 'rgba(108,99,255,' + (0.15 + energy * 0.25).toFixed(3) + ')');
+    fillGrad.addColorStop(1, 'rgba(150,140,255,' + (0.25 + energy * 0.4).toFixed(3) + ')');
+    ctx.fillStyle = fillGrad;
+  } else {
+    ctx.fillStyle = 'rgba(108,99,255,0.05)';
   }
+  ctx.fill();
 
-  // ── Particles ──
-  X.shadowBlur = 0;
-  for (const p of P) {
-    p.a += p.s*(1+lvl*3);
-    const pr = R*p.r*(0.85+lvl*0.25);
-    const px = cx+Math.cos(p.a)*pr, py = cy+Math.sin(p.a)*pr;
-    const al = p.br*(0.15+lvl*0.6);
-    const sz = p.sz*(0.8+lvl*1.5);
-    const cr = Math.max(0,Math.min(255, 160+p.h));
-    const cg = Math.max(0,Math.min(255, 140+p.h*0.5));
-    X.fillStyle = `rgba(${cr},${cg},255,${al})`;
-    X.shadowBlur = sz*5;
-    X.shadowColor = `rgba(108,99,255,${al*0.6})`;
-    X.beginPath(); X.arc(px,py,sz,0,Math.PI*2); X.fill();
+  // --- Outer ring neon glow ---
+  ctx.globalCompositeOperation = 'lighter';
+
+  // Bloom
+  ctx.beginPath();
+  for (var i = 0; i <= PTS; i++) {
+    var a = (i / PTS) * Math.PI * 2;
+    var x = cx + Math.cos(a) * outerR[i];
+    var y = cy + Math.sin(a) * outerR[i];
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }
+  ctx.closePath();
+  ctx.strokeStyle = 'rgba(108,99,255,' + (0.04 + energy * 0.05).toFixed(3) + ')';
+  ctx.lineWidth = 14;
+  ctx.stroke();
 
-  // ── Center core ──
-  X.globalCompositeOperation = 'source-over';
-  X.shadowBlur = 0;
-  const cr = R*0.15*(1+lvl*0.6+Math.sin(t*2.5)*0.03);
-  // Outer bloom
-  const cg1 = X.createRadialGradient(cx,cy,0,cx,cy,cr*3);
-  cg1.addColorStop(0,`rgba(108,99,255,${0.08+lvl*0.12})`);
-  cg1.addColorStop(1,'rgba(108,99,255,0)');
-  X.fillStyle=cg1; X.beginPath(); X.arc(cx,cy,cr*3,0,Math.PI*2); X.fill();
-  // Core
-  const cg2 = X.createRadialGradient(cx,cy,0,cx,cy,cr);
-  cg2.addColorStop(0,`rgba(220,215,255,${0.5+lvl*0.5})`);
-  cg2.addColorStop(0.4,`rgba(108,99,255,${0.3+lvl*0.4})`);
-  cg2.addColorStop(1,'rgba(60,50,180,0)');
-  X.fillStyle=cg2; X.beginPath(); X.arc(cx,cy,cr,0,Math.PI*2); X.fill();
-  // Hot center
-  X.fillStyle=`rgba(255,255,255,${0.3+lvl*0.7})`;
-  X.beginPath(); X.arc(cx,cy,2+lvl*2.5,0,Math.PI*2); X.fill();
+  // Mid glow
+  ctx.beginPath();
+  for (var i = 0; i <= PTS; i++) {
+    var a = (i / PTS) * Math.PI * 2;
+    var x = cx + Math.cos(a) * outerR[i];
+    var y = cy + Math.sin(a) * outerR[i];
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = 'rgba(108,99,255,' + (0.08 + energy * 0.1).toFixed(3) + ')';
+  ctx.lineWidth = 6;
+  ctx.stroke();
+
+  // Sharp edge
+  ctx.beginPath();
+  for (var i = 0; i <= PTS; i++) {
+    var a = (i / PTS) * Math.PI * 2;
+    var x = cx + Math.cos(a) * outerR[i];
+    var y = cy + Math.sin(a) * outerR[i];
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = 'rgba(170,165,255,' + (0.5 + energy * 0.5).toFixed(3) + ')';
+  ctx.lineWidth = 1.8;
+  ctx.stroke();
+
+  // Base circle removed — gradient fill and outer ring carry the shape
+
+  ctx.globalCompositeOperation = 'source-over';
+
+  // --- Core ---
+  var cr = 4 + energy * 8;
+  var cg = ctx.createRadialGradient(cx, cy, 0, cx, cy, cr * 3);
+  cg.addColorStop(0, 'rgba(200,195,255,' + (0.3 + energy * 0.6).toFixed(2) + ')');
+  cg.addColorStop(0.4, 'rgba(108,99,255,' + (0.1 + energy * 0.2).toFixed(2) + ')');
+  cg.addColorStop(1, 'rgba(108,99,255,0)');
+  ctx.fillStyle = cg;
+  ctx.beginPath(); ctx.arc(cx, cy, cr * 3, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,' + (0.2 + energy * 0.8).toFixed(2) + ')';
+  ctx.beginPath(); ctx.arc(cx, cy, 1.5 + energy * 2.5, 0, Math.PI * 2); ctx.fill();
 }
 
-function drawNeonRing(radiusFrac, ampFrac, color, lineW, glow, speed, lvl) {
-  const baseR = R * radiusFrac;
-  const amp = R * ampFrac;
-  const pts = 256; // High resolution for smoothness
-  const [cr,cg,cb] = color;
-
-  X.beginPath();
-  for (let i = 0; i <= pts; i++) {
-    const frac = i / pts;
-    const angle = frac * Math.PI * 2;
-
-    // Get smoothly interpolated amplitude at this angle
-    const v = getSmooth(smooth, frac);
-
-    // Multi-frequency organic deformation
-    const deform = v * amp
-      + Math.sin(angle*2 + t*speed) * amp * 0.08 * (1+lvl)
-      + Math.sin(angle*5 + t*speed*1.7) * amp * 0.03
-      + Math.sin(angle*9 + t*speed*0.4) * amp * 0.015;
-
-    const r = baseR + deform;
-    const x = cx + Math.cos(angle) * r;
-    const y = cy + Math.sin(angle) * r;
-    i === 0 ? X.moveTo(x,y) : X.lineTo(x,y);
-  }
-  X.closePath();
-
-  const alpha = 0.4 + lvl*0.6;
-  X.strokeStyle = `rgba(${cr},${cg},${cb},${alpha})`;
-  X.lineWidth = lineW + lvl*1.5;
-  X.shadowBlur = glow + lvl*25;
-  X.shadowColor = `rgba(${cr},${cg},${cb},${0.5+lvl*0.5})`;
-  X.stroke();
-
-  // Second thinner pass for extra glow
-  X.strokeStyle = `rgba(${Math.min(255,cr+40)},${Math.min(255,cg+40)},${Math.min(255,cb+20)},${alpha*0.3})`;
-  X.lineWidth = (lineW + lvl*1.5) * 2.5;
-  X.shadowBlur = glow*2 + lvl*30;
-  X.stroke();
-}
-
-function drawIdle() {
-  X.globalCompositeOperation = 'lighter';
-  const b = 0.5+Math.sin(t)*0.08;
-  // Ring 1
-  X.beginPath(); X.arc(cx,cy,R*b,0,Math.PI*2);
-  X.strokeStyle=`rgba(108,99,255,${0.06+Math.sin(t)*0.03})`;
-  X.lineWidth=1.2; X.shadowBlur=18; X.shadowColor='rgba(108,99,255,0.25)'; X.stroke();
-  // Ring 2
-  X.beginPath(); X.arc(cx,cy,R*b*0.65,0,Math.PI*2);
-  X.strokeStyle=`rgba(0,210,255,${0.04+Math.sin(t*1.2)*0.02})`;
-  X.lineWidth=0.8; X.shadowBlur=12; X.shadowColor='rgba(0,210,255,0.15)'; X.stroke();
-  X.globalCompositeOperation='source-over'; X.shadowBlur=0;
-  // Core
-  const g=X.createRadialGradient(cx,cy,0,cx,cy,R*0.12);
-  g.addColorStop(0,`rgba(108,99,255,${0.1+Math.sin(t)*0.04})`); g.addColorStop(1,'rgba(108,99,255,0)');
-  X.fillStyle=g; X.beginPath(); X.arc(cx,cy,R*0.12,0,Math.PI*2); X.fill();
-  X.fillStyle=`rgba(180,175,255,${0.2+Math.sin(t)*0.08})`; X.beginPath(); X.arc(cx,cy,2.5,0,Math.PI*2); X.fill();
-}
-
-function avg(arr,s,e) { let sum=0; for(let i=s;i<e;i++) sum+=arr[i]; return (e-s)>0?sum/(e-s):0; }
-
-draw();
+render();
 </script>
-</body></html>
+</body>
+</html>
