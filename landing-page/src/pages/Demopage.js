@@ -25,6 +25,7 @@ import {animateScroll as scrollLibrary} from 'react-scroll';
 
 import autobahn from 'autobahn';
 import { classifyError, getBackoff, makeMsgId } from '../utils/chatRetry';
+import VoiceVisualizer from '../components/VoiceVisualizer';
 import { decrypt, encrypt } from '../utils/encryption';
 import { logger } from '../utils/logger';
 
@@ -3393,26 +3394,21 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
                           onError={handleVideoError}
                         />
                       ) : audioUrl ? (
-                        <div className="fixed flex flex-col justify-center items-center  p-4">
-                          <div className="flex items-center space-x-4 justify-center mt-5 px-4 py-4">
-                            <div className="w-16 h-16 rounded-full bg-gray-200 flex items-center justify-center">
-                              <button className="text-gray-700 text-xl">
-                                ▶️
-                              </button>
-                            </div>
-                          </div>
-                          <div className="mt-4 w-full max-w-md">
-                            <audio
-                              ref={audioRef}
-                              src={audioUrl}
-                              className="w-full"
-                              autoPlay
-                              controlsList="nodownload noplaybackrate"
-                              controls={false}
-                              onLoadedMetadata={handleLoadedMetadataaudio}
-                              onEnded={handleMediaEnded}
-                            />
-                          </div>
+                        <div className="fixed bottom-24 right-4 z-50 flex flex-col items-center">
+                          <VoiceVisualizer
+                            audioRef={audioRef}
+                            isActive={isPlayingResponse}
+                            size={120}
+                          />
+                          <audio
+                            ref={audioRef}
+                            src={audioUrl}
+                            autoPlay
+                            controlsList="nodownload noplaybackrate"
+                            controls={false}
+                            onLoadedMetadata={handleLoadedMetadataaudio}
+                            onEnded={handleMediaEnded}
+                          />
                         </div>
                       ) : null}
                     </>
