@@ -5314,6 +5314,68 @@ def main():
             _hotkey_thread.start()
             logger.info("[STARTUP] Global hotkey listener thread started (Win+N)")
 
+        # ── React mount guard — runs for ALL modes (not just background) ──
+        # pywebview's WebView2 can suspend rAF/CSS transitions during creation,
+        # preventing React 18's createRoot from completing the initial render.
+        # This fires on the first `loaded` event and forces opacity/transitions.
+        _mount_guard_fired = [False]
+
+        def _on_any_loaded():
+            if _mount_guard_fired[0]:
+                return
+            _mount_guard_fired[0] = True
+
+            def _mount_guard():
+                # Wait for React to settle after page load
+                time.sleep(2.0)
+                try:
+                    state = _window.evaluate_js(
+                        "(function(){"
+                        "  var r = document.getElementById('root');"
+                        "  if (!r) return 'no_root';"
+                        "  if (r.children.length === 0) return 'empty';"
+                        "  return 'mounted';"
+                        "})()"
+                    )
+                    logger.info(f"[MOUNT_GUARD] Initial check: {state}")
+
+                    if state == 'mounted':
+                        # Force CSS transitions to final state (WebView2 may have suspended them)
+                        _window.evaluate_js(
+                            "(function(){"
+                            "  document.querySelectorAll('[style*=\"opacity\"]').forEach(function(el){"
+                            "    if (getComputedStyle(el).opacity === '0') {"
+                            "      el.style.transition = 'none';"
+                            "      el.style.opacity = '1';"
+                            "    }"
+                            "  });"
+                            "  var hero = document.getElementById('hero-section');"
+                            "  if (hero) { hero.style.transition = 'none'; hero.style.opacity = '1'; }"
+                            "  document.body.style.display = 'none';"
+                            "  void document.body.offsetHeight;"
+                            "  document.body.style.display = '';"
+                            "})()"
+                        )
+                        logger.info("[MOUNT_GUARD] Transitions forced, repaint done")
+                    elif state in ('empty', 'no_root', None):
+                        logger.warning(f"[MOUNT_GUARD] React not mounted ({state}) — reloading")
+                        _window.load_url(f"http://localhost:{args.port}/local")
+                        time.sleep(3.0)
+                        # Force resize to wake compositor
+                        try:
+                            w, h = _window.width, _window.height
+                            _window.resize(w + 1, h)
+                            time.sleep(0.1)
+                            _window.resize(w, h)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.warning(f"[MOUNT_GUARD] Check failed: {e}")
+
+            threading.Thread(target=_mount_guard, daemon=True, name='mount_guard').start()
+
+        _window.events.loaded += _on_any_loaded
+
         # In background mode, reload the page on first show — the initial load
         # may have hit Flask before it was fully ready (especially on Windows boot).
         if start_hidden:
