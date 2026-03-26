@@ -875,15 +875,30 @@ setup(
 if 'build' in sys.argv or 'build_exe' in sys.argv:
     _build_lib = os.path.join(os.path.abspath(build_exe_options["build_exe"]), "lib")
     if os.path.isdir(_build_lib):
+        # Only compile known HARTOS source modules — never touch cx_Freeze
+        # internal files (__startup__, BUILD_CONSTANTS, etc.) because their
+        # bootstrap loader requires the original .py format.
+        _HARTOS_MODS = {
+            'hart_intelligence', 'hart_intelligence_entry', 'helper',
+            'helper_ledger', 'create_recipe', 'reuse_recipe',
+            'lifecycle_hooks', 'threadlocal', 'gather_agentdetails',
+            'cultural_wisdom', 'recipe_experience', 'exception_collector',
+            'agent_identity', 'hart_onboarding', 'hartos_speech',
+            'hartos_speech_stitch', 'crossbar_server', 'hart_version',
+            'hart_onboarding', 'proxy_tools',
+        }
         _compiled = 0
         for _py_file in glob.glob(os.path.join(_build_lib, "*.py")):
-            # cx_Freeze may have already compiled and removed this .py file
-            # (it does its own compilation pass). Skip if file is gone.
+            _mod_name = os.path.splitext(os.path.basename(_py_file))[0]
+            # Skip cx_Freeze internal modules (e.g. __startup__, BUILD_CONSTANTS)
+            if _mod_name.startswith('_') or _mod_name not in _HARTOS_MODS:
+                continue
+            # cx_Freeze may have already compiled and removed this .py file.
             if not os.path.isfile(_py_file):
                 continue
             _base = os.path.splitext(_py_file)[0]
             _pyc_file = _base + ".pyc"
-            # Also skip if cx_Freeze already produced a .pyc for this module
+            # Skip if cx_Freeze already produced a .pyc for this module
             if os.path.isfile(_pyc_file):
                 try:
                     os.remove(_py_file)
