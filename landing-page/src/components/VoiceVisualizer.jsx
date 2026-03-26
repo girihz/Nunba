@@ -1,256 +1,202 @@
 import React, { useRef, useEffect, useCallback } from 'react';
 
 /**
- * VoiceVisualizer — Butter-smooth neon circular amplitude.
+ * VoiceVisualizer — Smooth sine-wave circular amplitude with neon glow.
  *
- * Key techniques for smoothness:
- * 1. Catmull-Rom spline interpolation (no jagged peaks)
- * 2. Per-band lerp smoothing (previous frame → current, 0.18 blend)
- * 3. Log-scale FFT mapping (more bass detail, fewer treble spikes)
- * 4. Multi-frequency organic deformation (2x + 5x + 9x harmonics)
- * 5. 256-point ring resolution for silk-smooth curves
- * 6. Additive blending (globalCompositeOperation: 'lighter')
- * 7. Trail persistence for neon glow afterimage
+ * Design:
+ * - 3 energy bands (bass/mid/treble) drive sine harmonics around the circle
+ * - Peaks only go outward (smooth rectifier, never below base radius)
+ * - Gradient fill: transparent at base → glowy at peak tips
+ * - Neon glow via 3-pass stroke (bloom + mid + sharp)
+ * - 60fps, zero shadowBlur, zero canvas filter
  */
-const BANDS = 128;
+var PTS = 180;
 
-const VoiceVisualizer = ({ audioRef, isActive, size = 200, style }) => {
-  const canvasRef = useRef(null);
-  const animRef = useRef(null);
-  const analyserRef = useRef(null);
-  const sourceRef = useRef(null);
-  const audioCtxRef = useRef(null);
-  const smoothRef = useRef(new Float32Array(BANDS));
-  const targetRef = useRef(new Float32Array(BANDS));
-  const particlesRef = useRef([]);
-  const phaseRef = useRef(0);
+var VoiceVisualizer = function({ audioRef, isActive, size, style }) {
+  size = size || 200;
+  var canvasRef = useRef(null);
+  var animRef = useRef(null);
+  var analyserRef = useRef(null);
+  var sourceRef = useRef(null);
+  var audioCtxRef = useRef(null);
+  var stateRef = useRef({ bass: 0, mid: 0, treble: 0, bassCur: 0, midCur: 0, trebleCur: 0, time: 0 });
+  var outerR = useRef(new Float32Array(PTS + 1));
 
-  const connectAnalyser = useCallback(() => {
-    if (!audioRef?.current || sourceRef.current) return;
+  var connectAnalyser = useCallback(function() {
+    if (!audioRef || !audioRef.current || sourceRef.current) return;
     try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      var ctx = new (window.AudioContext || window.webkitAudioContext)();
       audioCtxRef.current = ctx;
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 1024;
-      analyser.smoothingTimeConstant = 0.88;
-      const source = ctx.createMediaElementSource(audioRef.current);
+      var analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.8;
+      var source = ctx.createMediaElementSource(audioRef.current);
       source.connect(analyser);
       analyser.connect(ctx.destination);
       analyserRef.current = analyser;
       sourceRef.current = source;
-    } catch { /* synthetic fallback */ }
+    } catch(e) { /* synthetic fallback */ }
   }, [audioRef]);
 
-  useEffect(() => {
-    const pts = [];
-    for (let i = 0; i < 80; i++) pts.push({
-      a: Math.random() * Math.PI * 2, r: 0.35 + Math.random() * 0.55,
-      s: 0.001 + Math.random() * 0.003, sz: 0.3 + Math.random() * 1.2,
-      br: 0.2 + Math.random() * 0.6, h: Math.random() * 80 - 40,
-    });
-    particlesRef.current = pts;
-  }, []);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
+  useEffect(function() {
+    var canvas = canvasRef.current;
     if (!canvas) return;
-    const X = canvas.getContext('2d');
-    const W = canvas.width, H = canvas.height;
-    const cx = W / 2, cy = H / 2, R = Math.min(cx, cy) * 0.88;
-    const smooth = smoothRef.current;
-    const target = targetRef.current;
-    const freq = new Uint8Array(512);
-    const wave = new Uint8Array(512);
+    var ctx = canvas.getContext('2d');
+    var W = canvas.width, H = canvas.height;
+    var cx = W / 2, cy = H / 2;
+    var baseR = W * 0.25;
+    var freqData = new Uint8Array(256);
+    var s = stateRef.current;
+    var oR = outerR.current;
 
     if (isActive) connectAnalyser();
 
-    function catmull(p0, p1, p2, p3, t) {
-      const t2 = t * t, t3 = t2 * t;
-      return 0.5 * (2*p1 + (p2-p0)*t + (2*p0-5*p1+4*p2-p3)*t2 + (-p0+3*p1-3*p2+p3)*t3);
-    }
-
-    function getSmooth(arr, pos) {
-      const len = arr.length, i = pos * len;
-      const i0 = ((Math.floor(i)-1)%len+len)%len;
-      const i1 = Math.floor(i) % len;
-      const i2 = (Math.floor(i)+1) % len;
-      const i3 = (Math.floor(i)+2) % len;
-      return catmull(arr[i0], arr[i1], arr[i2], arr[i3], i - Math.floor(i));
-    }
-
-    function avg(arr, s, e) {
-      let sum = 0; for (let i = s; i < e; i++) sum += arr[i];
-      return (e-s) > 0 ? sum / (e-s) : 0;
-    }
-
-    function drawNeonRing(radiusF, ampF, color, lineW, glow, speed, lvl, t) {
-      const baseR = R * radiusF, amp = R * ampF;
-      const [cr, cg, cb] = color;
-      X.beginPath();
-      for (let i = 0; i <= 256; i++) {
-        const frac = i / 256, angle = frac * Math.PI * 2;
-        const v = getSmooth(smooth, frac);
-        const deform = v * amp
-          + Math.sin(angle*2 + t*speed) * amp * 0.08 * (1+lvl)
-          + Math.sin(angle*5 + t*speed*1.7) * amp * 0.03
-          + Math.sin(angle*9 + t*speed*0.4) * amp * 0.015;
-        const r = baseR + deform;
-        const x = cx + Math.cos(angle) * r, y = cy + Math.sin(angle) * r;
-        i === 0 ? X.moveTo(x, y) : X.lineTo(x, y);
-      }
-      X.closePath();
-      const alpha = 0.4 + lvl * 0.6;
-      X.strokeStyle = `rgba(${cr},${cg},${cb},${alpha})`;
-      X.lineWidth = lineW + lvl * 1.5;
-      X.shadowBlur = glow + lvl * 25;
-      X.shadowColor = `rgba(${cr},${cg},${cb},${0.5+lvl*0.5})`;
-      X.stroke();
-      X.strokeStyle = `rgba(${Math.min(255,cr+40)},${Math.min(255,cg+40)},${Math.min(255,cb+20)},${alpha*0.3})`;
-      X.lineWidth = (lineW + lvl * 1.5) * 2.5;
-      X.shadowBlur = glow * 2 + lvl * 30;
-      X.stroke();
-    }
-
-    const draw = () => {
-      animRef.current = requestAnimationFrame(draw);
-      const t = (phaseRef.current += 0.012);
-      const an = analyserRef.current;
+    function render() {
+      animRef.current = requestAnimationFrame(render);
+      s.time += 0.02;
+      var an = analyserRef.current;
 
       if (isActive && an) {
-        an.getByteFrequencyData(freq);
-        an.getByteTimeDomainData(wave);
-        for (let i = 0; i < BANDS; i++) {
-          const frac = i / BANDS;
-          const fi = Math.floor(Math.pow(frac, 1.5) * freq.length * 0.8);
-          let sum = 0, count = 0;
-          for (let j = Math.max(0, fi-2); j <= Math.min(freq.length-1, fi+2); j++) { sum += freq[j]; count++; }
-          target[i] = (sum / count) / 255;
+        an.getByteFrequencyData(freqData);
+        var bS = 0, mS = 0, tS = 0, len = freqData.length;
+        for (var i = 0; i < len; i++) {
+          if (i < len * 0.15) bS += freqData[i];
+          else if (i < len * 0.5) mS += freqData[i];
+          else tS += freqData[i];
         }
-      } else if (isActive) {
-        for (let i = 0; i < BANDS; i++)
-          target[i] = 0.3 + 0.5 * Math.abs(Math.sin(t*1.8+i*0.12) * Math.cos(t*0.9+i*0.06) * Math.sin(t*0.5+i*0.2));
+        s.bass = bS / (len * 0.15) / 255;
+        s.mid = mS / (len * 0.35) / 255;
+        s.treble = tS / (len * 0.5) / 255;
       } else {
-        for (let i = 0; i < BANDS; i++) target[i] *= 0.92;
+        s.bass *= 0.95; s.mid *= 0.95; s.treble *= 0.95;
       }
 
-      const lerp = isActive ? 0.18 : 0.06;
-      for (let i = 0; i < BANDS; i++) smooth[i] += (target[i] - smooth[i]) * lerp;
+      s.bassCur += (s.bass - s.bassCur) * 0.12;
+      s.midCur += (s.mid - s.midCur) * 0.10;
+      s.trebleCur += (s.treble - s.trebleCur) * 0.08;
+      var energy = s.bassCur * 0.5 + s.midCur * 0.35 + s.trebleCur * 0.15;
+      var t = s.time;
 
-      const bass = avg(smooth, 0, 16), mid = avg(smooth, 16, 64), hi = avg(smooth, 64, BANDS);
-      const lvl = bass * 0.5 + mid * 0.35 + hi * 0.15;
+      ctx.fillStyle = '#0A0914';
+      ctx.fillRect(0, 0, W, H);
 
-      X.globalCompositeOperation = 'source-over';
-      X.fillStyle = `rgba(10,9,20,${isActive ? 0.18 : 0.06})`;
-      X.fillRect(0, 0, W, H);
+      // Background glow
+      var bg = ctx.createRadialGradient(cx, cy, baseR - 10, cx, cy, baseR + 70);
+      bg.addColorStop(0, 'rgba(108,99,255,' + (0.02 + energy * 0.06).toFixed(3) + ')');
+      bg.addColorStop(1, 'rgba(10,9,20,0)');
+      ctx.fillStyle = bg;
+      ctx.beginPath(); ctx.arc(cx, cy, baseR + 70, 0, Math.PI * 2); ctx.fill();
 
-      if (!isActive && lvl < 0.01) {
-        // Idle
-        X.globalCompositeOperation = 'lighter';
-        const b = 0.5 + Math.sin(t) * 0.08;
-        X.beginPath(); X.arc(cx, cy, R*b, 0, Math.PI*2);
-        X.strokeStyle = `rgba(108,99,255,${0.06+Math.sin(t)*0.03})`;
-        X.lineWidth = 1.2; X.shadowBlur = 18; X.shadowColor = 'rgba(108,99,255,0.25)'; X.stroke();
-        X.beginPath(); X.arc(cx, cy, R*b*0.65, 0, Math.PI*2);
-        X.strokeStyle = `rgba(0,210,255,${0.04+Math.sin(t*1.2)*0.02})`;
-        X.lineWidth = 0.8; X.shadowBlur = 12; X.shadowColor = 'rgba(0,210,255,0.15)'; X.stroke();
-        X.globalCompositeOperation = 'source-over'; X.shadowBlur = 0;
-        const g = X.createRadialGradient(cx, cy, 0, cx, cy, R*0.12);
-        g.addColorStop(0, `rgba(108,99,255,${0.1+Math.sin(t)*0.04})`); g.addColorStop(1, 'rgba(108,99,255,0)');
-        X.fillStyle = g; X.beginPath(); X.arc(cx, cy, R*0.12, 0, Math.PI*2); X.fill();
-        X.fillStyle = `rgba(180,175,255,${0.2+Math.sin(t)*0.08})`; X.beginPath(); X.arc(cx, cy, 2.5, 0, Math.PI*2); X.fill();
-        return;
+      // Compute outer ring — peaks only outward
+      var maxPeakR = baseR;
+      for (var i = 0; i <= PTS; i++) {
+        var a = (i / PTS) * Math.PI * 2;
+        var wave =
+          s.bassCur * 55 * Math.sin(2 * a + t * 1.5) +
+          s.bassCur * 32 * Math.sin(3 * a - t * 0.8) +
+          s.midCur * 40 * Math.sin(4 * a + t * 2.2) +
+          s.midCur * 24 * Math.sin(6 * a - t * 1.3) +
+          s.trebleCur * 28 * Math.sin(8 * a + t * 3.0) +
+          s.trebleCur * 16 * Math.sin(11 * a - t * 1.8);
+        var soft = 8;
+        var rectified = (wave * wave) / (Math.abs(wave) + soft);
+        // Scale amplitude relative to canvas size
+        oR[i] = baseR + rectified * (baseR / 100);
+        if (oR[i] > maxPeakR) maxPeakR = oR[i];
       }
 
-      // Halo
-      const hr = R * (0.9 + lvl * 0.3);
-      const hg = X.createRadialGradient(cx, cy, 0, cx, cy, hr);
-      hg.addColorStop(0, `rgba(108,99,255,${0.04+lvl*0.06})`);
-      hg.addColorStop(0.5, `rgba(80,40,200,${0.02+lvl*0.03})`);
-      hg.addColorStop(1, 'rgba(10,9,20,0)');
-      X.fillStyle = hg; X.beginPath(); X.arc(cx, cy, hr, 0, Math.PI*2); X.fill();
-
-      X.globalCompositeOperation = 'lighter';
-      drawNeonRing(0.6, 0.18, [108,99,255], 3, 35, 1.0, lvl, t);
-      drawNeonRing(0.48, 0.10, [0,210,255], 2, 22, -0.6, lvl, t);
-      drawNeonRing(0.72, 0.14, [160,50,255], 2.2, 28, 0.4, lvl, t);
-
-      // Waveform
-      if (isActive && an) {
-        const wr = R * 0.28;
-        X.beginPath();
-        for (let i = 0; i <= 200; i++) {
-          const a = (i/200) * Math.PI * 2;
-          const wi = Math.floor((i/200) * wave.length) % wave.length;
-          const v = (wave[wi] - 128) / 128;
-          const r = wr + v * R * 0.06;
-          const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
-          i === 0 ? X.moveTo(x, y) : X.lineTo(x, y);
-        }
-        X.closePath();
-        X.strokeStyle = `rgba(255,107,107,${0.25+lvl*0.4})`;
-        X.lineWidth = 1.2; X.shadowBlur = 10 + lvl*12;
-        X.shadowColor = `rgba(255,107,107,${0.4+lvl*0.3})`; X.stroke();
+      // Fill area between base and outer
+      ctx.beginPath();
+      for (var i = 0; i <= PTS; i++) {
+        var a = (i / PTS) * Math.PI * 2;
+        var x = cx + Math.cos(a) * oR[i], y = cy + Math.sin(a) * oR[i];
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
-
-      // Particles
-      X.shadowBlur = 0;
-      for (const p of particlesRef.current) {
-        p.a += p.s * (1 + lvl * 3);
-        const pr = R * p.r * (0.85 + lvl * 0.25);
-        const px = cx + Math.cos(p.a) * pr, py = cy + Math.sin(p.a) * pr;
-        const al = p.br * (0.15 + lvl * 0.6);
-        const sz = p.sz * (0.8 + lvl * 1.5);
-        X.fillStyle = `rgba(${Math.max(0,Math.min(255,160+p.h))},${Math.max(0,Math.min(255,140+p.h*0.5))},255,${al})`;
-        X.shadowBlur = sz * 5; X.shadowColor = `rgba(108,99,255,${al*0.6})`;
-        X.beginPath(); X.arc(px, py, sz, 0, Math.PI*2); X.fill();
+      for (var i = PTS; i >= 0; i--) {
+        var a = (i / PTS) * Math.PI * 2;
+        ctx.lineTo(cx + Math.cos(a) * baseR, cy + Math.sin(a) * baseR);
       }
+      ctx.closePath();
+
+      if (maxPeakR > baseR + 1) {
+        var fg = ctx.createRadialGradient(cx, cy, baseR, cx, cy, maxPeakR);
+        fg.addColorStop(0, 'rgba(10,9,20,0)');
+        fg.addColorStop(0.3, 'rgba(80,60,220,' + (0.08 + energy * 0.15).toFixed(3) + ')');
+        fg.addColorStop(0.7, 'rgba(108,99,255,' + (0.15 + energy * 0.25).toFixed(3) + ')');
+        fg.addColorStop(1, 'rgba(150,140,255,' + (0.25 + energy * 0.4).toFixed(3) + ')');
+        ctx.fillStyle = fg;
+      } else {
+        ctx.fillStyle = 'rgba(108,99,255,0.05)';
+      }
+      ctx.fill();
+
+      // Neon ring — 3 passes
+      ctx.globalCompositeOperation = 'lighter';
+
+      drawRing(ctx, cx, cy, oR, 'rgba(108,99,255,' + (0.04 + energy * 0.05).toFixed(3) + ')', 14);
+      drawRing(ctx, cx, cy, oR, 'rgba(108,99,255,' + (0.08 + energy * 0.1).toFixed(3) + ')', 6);
+      drawRing(ctx, cx, cy, oR, 'rgba(170,165,255,' + (0.5 + energy * 0.5).toFixed(3) + ')', 1.8);
+
+      ctx.globalCompositeOperation = 'source-over';
 
       // Core
-      X.globalCompositeOperation = 'source-over'; X.shadowBlur = 0;
-      const cr = R * 0.15 * (1 + lvl * 0.6 + Math.sin(t*2.5) * 0.03);
-      const cg1 = X.createRadialGradient(cx, cy, 0, cx, cy, cr*3);
-      cg1.addColorStop(0, `rgba(108,99,255,${0.08+lvl*0.12})`); cg1.addColorStop(1, 'rgba(108,99,255,0)');
-      X.fillStyle = cg1; X.beginPath(); X.arc(cx, cy, cr*3, 0, Math.PI*2); X.fill();
-      const cg2 = X.createRadialGradient(cx, cy, 0, cx, cy, cr);
-      cg2.addColorStop(0, `rgba(220,215,255,${0.5+lvl*0.5})`);
-      cg2.addColorStop(0.4, `rgba(108,99,255,${0.3+lvl*0.4})`);
-      cg2.addColorStop(1, 'rgba(60,50,180,0)');
-      X.fillStyle = cg2; X.beginPath(); X.arc(cx, cy, cr, 0, Math.PI*2); X.fill();
-      X.fillStyle = `rgba(255,255,255,${0.3+lvl*0.7})`; X.beginPath(); X.arc(cx, cy, 2+lvl*2.5, 0, Math.PI*2); X.fill();
-    };
+      var cr = 4 + energy * 8;
+      var cg = ctx.createRadialGradient(cx, cy, 0, cx, cy, cr * 3);
+      cg.addColorStop(0, 'rgba(200,195,255,' + (0.3 + energy * 0.6).toFixed(2) + ')');
+      cg.addColorStop(0.4, 'rgba(108,99,255,' + (0.1 + energy * 0.2).toFixed(2) + ')');
+      cg.addColorStop(1, 'rgba(108,99,255,0)');
+      ctx.fillStyle = cg;
+      ctx.beginPath(); ctx.arc(cx, cy, cr * 3, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,' + (0.2 + energy * 0.8).toFixed(2) + ')';
+      ctx.beginPath(); ctx.arc(cx, cy, 1.5 + energy * 2.5, 0, Math.PI * 2); ctx.fill();
+    }
 
-    draw();
-    return () => { if (animRef.current) cancelAnimationFrame(animRef.current); };
+    render();
+    return function() { if (animRef.current) cancelAnimationFrame(animRef.current); };
   }, [isActive, connectAnalyser]);
 
-  useEffect(() => () => {
-    if (animRef.current) cancelAnimationFrame(animRef.current);
-    if (audioCtxRef.current?.state !== 'closed') {
-      try { audioCtxRef.current?.close(); } catch { /* */ }
-    }
+  useEffect(function() {
+    return function() {
+      if (animRef.current) cancelAnimationFrame(animRef.current);
+      if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
+        try { audioCtxRef.current.close(); } catch(e) {}
+      }
+    };
   }, []);
 
-  return (
-    <div style={{
+  return React.createElement('div', {
+    style: Object.assign({
       width: size, height: size, position: 'relative',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
-      filter: isActive ? 'drop-shadow(0 0 40px rgba(108,99,255,0.35))' : 'none',
-      transition: 'filter 0.6s ease', ...style,
-    }}>
-      <canvas ref={canvasRef} width={size*2} height={size*2}
-        style={{ width: size, height: size, borderRadius: '50%' }} />
-      {isActive && (
-        <div style={{
-          position: 'absolute', bottom: -14, left: '50%', transform: 'translateX(-50%)',
-          fontSize: 8, letterSpacing: 4, textTransform: 'uppercase', fontWeight: 700,
-          background: 'linear-gradient(90deg,#6C63FF,#00D2FF,#B43CE6)',
-          WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
-          animation: 'vizPulse 2s ease-in-out infinite',
-        }}>Speaking</div>
-      )}
-      <style>{`@keyframes vizPulse{0%,100%{opacity:.6;filter:brightness(1)}50%{opacity:1;filter:brightness(1.5)}}`}</style>
-    </div>
+    }, style || {}),
+  },
+    React.createElement('canvas', {
+      ref: canvasRef,
+      width: size * 2, height: size * 2,
+      style: { width: size, height: size, borderRadius: '50%' },
+    }),
+    isActive ? React.createElement('div', {
+      style: {
+        position: 'absolute', bottom: -14, left: '50%', transform: 'translateX(-50%)',
+        fontSize: 8, letterSpacing: 4, textTransform: 'uppercase', fontWeight: 700,
+        background: 'linear-gradient(90deg,#6C63FF,#00D2FF)', WebkitBackgroundClip: 'text',
+        WebkitTextFillColor: 'transparent', backgroundClip: 'text', opacity: 0.7,
+      },
+    }, 'Speaking') : null
   );
 };
+
+function drawRing(ctx, cx, cy, oR, color, lw) {
+  ctx.beginPath();
+  for (var i = 0; i <= PTS; i++) {
+    var a = (i / PTS) * Math.PI * 2;
+    var x = cx + Math.cos(a) * oR[i], y = cy + Math.sin(a) * oR[i];
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lw;
+  ctx.stroke();
+}
 
 export default VoiceVisualizer;
