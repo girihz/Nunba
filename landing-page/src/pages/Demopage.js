@@ -3364,7 +3364,7 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
             <div
               className={`${
                 !uploadedImage && !uploadedPdf && window.innerWidth > 768
-                  ? (isTextMode || (!videoUrl && !audioUrl) ? 'w-0 overflow-hidden' : 'w-[30%]')
+                  ? (isTextMode || (!videoUrl && !audioUrl) ? 'w-0 overflow-hidden' : (videoUrl ? 'w-[30%]' : 'w-0 overflow-hidden'))
                   : 'w-full'
               } ${
                 window.innerWidth <= 768 ? (isTextMode || (!videoUrl && !audioUrl) ? '' : 'h-[35vh] mb-4') : ''
@@ -3509,7 +3509,7 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
 
             <div
               className={`flex-1 w-full ${
-                !isTextMode && (videoUrl || audioUrl) && !uploadedImage && !uploadedPdf && window.innerWidth > 768
+                !isTextMode && videoUrl && !uploadedImage && !uploadedPdf && window.innerWidth > 768
                   ? 'md:w-[60%]'
                   : 'md:w-full'
               } overflow-x-clip pt-10 md:pt-0`}
