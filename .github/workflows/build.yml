@@ -94,6 +94,25 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 
+      - name: Install Python dependencies + sibling repos
+        shell: bash
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt 2>&1 | tail -5
+
+          # Install sibling deps in order: Hevolve_Database → hevolveai → HARTOS
+          for dep_dir in ../Hevolve_Database ../hevolveai ../HARTOS; do
+            if [ -f "$dep_dir/pyproject.toml" ] || [ -f "$dep_dir/setup.py" ]; then
+              echo "Installing $(basename $dep_dir) from source..."
+              pip install --no-deps -e "$dep_dir" 2>&1 | tail -2
+            fi
+          done
+
+          # Verify critical imports
+          python -c "import hart_intelligence; print('hart_intelligence OK')" 2>/dev/null || echo "WARN: hart_intelligence not importable"
+          python -c "import hevolveai; print('hevolveai OK')" 2>/dev/null || echo "WARN: hevolveai not importable"
+        continue-on-error: true
+
       - name: Build Nunba app (cx_Freeze + slim)
         run: python scripts/build.py app --skip-wizard
         env:
@@ -230,6 +249,18 @@ jobs:
       - name: Install create-dmg
         run: brew install create-dmg
 
+      - name: Install Python dependencies + sibling repos
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt 2>&1 | tail -5
+          for dep_dir in ../Hevolve_Database ../hevolveai ../HARTOS; do
+            if [ -f "$dep_dir/pyproject.toml" ] || [ -f "$dep_dir/setup.py" ]; then
+              echo "Installing $(basename $dep_dir) from source..."
+              pip install --no-deps -e "$dep_dir" 2>&1 | tail -2
+            fi
+          done
+        continue-on-error: true
+
       - name: Build Nunba
         run: python scripts/build.py full --skip-wizard
         env:
@@ -350,6 +381,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libfuse2 desktop-file-utils
+
+      - name: Install Python dependencies + sibling repos
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt 2>&1 | tail -5
+          for dep_dir in ../Hevolve_Database ../hevolveai ../HARTOS; do
+            if [ -f "$dep_dir/pyproject.toml" ] || [ -f "$dep_dir/setup.py" ]; then
+              echo "Installing $(basename $dep_dir) from source..."
+              pip install --no-deps -e "$dep_dir" 2>&1 | tail -2
+            fi
+          done
+        continue-on-error: true
 
       - name: Build Nunba app (cx_Freeze)
         run: python scripts/build.py app --skip-wizard
