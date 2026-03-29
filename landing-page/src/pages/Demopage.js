@@ -2092,11 +2092,12 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.interimResults = true;
-    // STT language = what the USER speaks (always English for now)
-    // hart_language = what the AI RESPONDS in (may be Tamil, Hindi, etc.)
-    // User speaks English → AI responds in preferred language
-    const _sttLang = localStorage.getItem('stt_language') || 'en';
-    recognition.lang = _sttLangMap[_sttLang] || _sttLang;
+    // STT: use hart_language as a HINT for browser Speech API,
+    // but user can speak any language — Whisper auto-detects on server.
+    // Browser API needs a BCP-47 hint for best results but handles
+    // mixed language (code-switching) reasonably well.
+    const _hartLang = localStorage.getItem('hart_language') || 'en';
+    recognition.lang = _sttLangMap[_hartLang] || _hartLang;
 
     // Track what was committed (final) vs what's still interim
     let committedText = '';
