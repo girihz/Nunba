@@ -245,14 +245,15 @@ def install_cuda_torch(progress_cb: Callable | None = None) -> tuple[bool, str]:
         return False, "No NVIDIA GPU detected"
 
     variant = get_torch_variant()
-    if variant != 'cpu':
+    if variant not in ('cpu', 'unknown', 'none'):
         return True, f"torch already has CUDA ({variant})"
 
     if progress_cb:
-        progress_cb("Upgrading PyTorch to CUDA version (~2.5GB download)...")
+        progress_cb("Installing CUDA PyTorch (~2.5GB download)...")
 
-    # Uninstall CPU torch first
-    _run_pip(['uninstall', '-y', 'torch'], progress_cb)
+    # Don't uninstall CPU torch from python-embed (read-only Program Files).
+    # Just install CUDA torch to ~/.nunba/site-packages/ — it shadows the
+    # CPU stub on sys.path (app.py inserts user site at index 0).
 
     # Install CUDA torch
     ok, msg = _run_pip([

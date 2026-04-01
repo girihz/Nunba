@@ -960,25 +960,28 @@ if ('build' in sys.argv or 'build_exe' in sys.argv):
         current_python_embed_hash = get_directory_hash("python-embed")
 
         _tts_deps = [
-            # (package_name, pip_install_name, check_import)
-            # Build runs on the target platform → gets correct native binaries
-            ("torchaudio", "torchaudio", "torchaudio"),
-            ("chatterbox-tts", "chatterbox-tts", "chatterbox"),
-            ("parler-tts", "parler-tts", "parler_tts"),
+            # (package_name, pip_install_name, check_import, extra_pip_args)
+            # CPU torch bundled (~200MB) — functional baseline for all machines.
+            # GPU users: CUDA torch installed to ~/.nunba/site-packages/ on first
+            # launch (background, ~2.5GB). Shadows CPU torch via sys.path priority.
+            ("torch (CPU)", "torch", "torch",
+             ["--index-url", "https://download.pytorch.org/whl/cpu"]),
+            ("torchaudio (CPU)", "torchaudio", "torchaudio",
+             ["--index-url", "https://download.pytorch.org/whl/cpu"]),
+            ("chatterbox-tts", "chatterbox-tts", "chatterbox", []),
+            ("parler-tts", "parler-tts", "parler_tts", []),
             # STT — CTranslate2 bundles platform-specific CUDA runtime
-            ("faster-whisper", "faster-whisper", "faster_whisper"),
-            ("ctranslate2", "ctranslate2", "ctranslate2"),
+            ("faster-whisper", "faster-whisper", "faster_whisper", []),
+            ("ctranslate2", "ctranslate2", "ctranslate2", []),
         ]
-        for _pkg_label, _pip_name, _import_name in _tts_deps:
+        for _pkg_label, _pip_name, _import_name, _extra_args in _tts_deps:
             _check_path = os.path.join(_embed_sp, _import_name)
             if os.path.isdir(_check_path) or os.path.isfile(_check_path + '.py'):
                 print(f"python-embed: {_pkg_label} already present")
                 continue
             print(f"python-embed: installing {_pkg_label} via --target...")
             _pip_cmd = [sys.executable, "-m", "pip", "install", _pip_name,
-                        "--target", _embed_sp, "--no-deps", "--quiet"]
-            if _pip_name == "torchaudio":
-                _pip_cmd.extend(["--index-url", "https://download.pytorch.org/whl/cu126"])
+                        "--target", _embed_sp, "--no-deps", "--quiet"] + _extra_args
             _r = subprocess.run(_pip_cmd, capture_output=True, text=True, timeout=300)
             if _r.returncode == 0:
                 print(f"python-embed: {_pkg_label} installed OK")
@@ -1048,19 +1051,10 @@ if ('build' in sys.argv or 'build_exe' in sys.argv) and not _skip_python_embed_c
             os.remove(_pth_file)
             print("Post-build: removed distutils-precedence.pth (fixes runtime pip)")
 
-        # ── Remove torch CPU stub from python-embed ──
-        # Torch is installed dynamically at runtime (CPU or CUDA depending on GPU).
-        # The stub in python-embed shadows the user-installed CUDA torch because
-        # python-embed/ is on sys.path before ~/.nunba/site-packages/.
-        # Removing it lets the dynamic install be the only torch Python finds.
-        # torchaudio is kept — it imports torch at runtime from wherever it's installed.
-        _torch_dir = os.path.join(_dst_embed, 'Lib', 'site-packages', 'torch')
-        if os.path.isdir(_torch_dir):
-            shutil.rmtree(_torch_dir, ignore_errors=True)
-            print("Post-build: removed torch from python-embed (dynamic install at runtime)")
-        # Also remove torch dist-info
-        for _di in glob.glob(os.path.join(_dst_embed, 'Lib', 'site-packages', 'torch-*')):
-            shutil.rmtree(_di, ignore_errors=True)
+        # ── torch CPU is bundled (real, not a stub) ──
+        # Provides functional CPU inference for all packages at startup.
+        # At runtime, if GPU detected, CUDA torch is installed to
+        # ~/.nunba/site-packages/ which is first on sys.path → shadows CPU torch.
 
         # ── Fix torch._C conflict ──
         # PyTorch ships with both torch/_C.cp312-win_amd64.pyd (the real compiled

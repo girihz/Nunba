@@ -1712,6 +1712,12 @@ if HARTOS_BACKEND_DIRECT:
         pass
 
     try:
+        from routes.kids_game_recommendation import kids_recommendation_bp
+        app.register_blueprint(kids_recommendation_bp)
+    except Exception:
+        pass
+
+    try:
         from routes.upload_routes import register_upload_routes
         register_upload_routes(app)
     except Exception:
@@ -2382,40 +2388,37 @@ def start_background_services():
             except Exception:
                 pass
 
-            # Ensure ~/.nunba/site-packages is on sys.path
+            # CPU torch is bundled. If GPU detected, install CUDA torch to
+            # ~/.nunba/site-packages/ in the background. It shadows the bundled
+            # CPU torch via sys.path on the NEXT launch (C extension can't reload
+            # in same process). This session uses CPU torch; next session uses GPU.
             try:
-                from tts.package_installer import ensure_user_site_on_path
-                ensure_user_site_on_path()
-            except Exception:
-                pass
-
-            # Ensure CUDA torch is installed (frozen build ships CPU stub)
-            # Must happen BEFORE set_language() so GPU backends pass _can_run_backend()
-            try:
-                from tts.package_installer import has_nvidia_gpu, install_cuda_torch, is_cuda_torch
+                from tts.package_installer import has_nvidia_gpu, is_cuda_torch
                 if has_nvidia_gpu() and not is_cuda_torch():
-                    logging.info("TTS warm-up: installing CUDA PyTorch (~2.5GB, one-time)...")
-                    def _cuda_progress(msg):
-                        logging.info(f"CUDA torch: {msg}")
+                    logging.info("TTS: GPU detected — downloading CUDA PyTorch in background...")
+                    def _bg_cuda_install():
                         try:
-                            from integrations.social.realtime import publish_event
-                            publish_event('setup_progress', {
-                                'type': 'setup_progress',
-                                'job_type': 'cuda_torch',
-                                'status': 'loading',
-                                'message': msg,
-                            })
-                        except Exception:
-                            pass
-                    ok, msg = install_cuda_torch(progress_cb=_cuda_progress)
-                    logging.info(f"CUDA torch install: {'OK' if ok else msg}")
-            except Exception as _cte:
-                logging.debug(f"CUDA torch check skipped: {_cte}")
-
-            # Clear TTSEngine's cached torch check (may have cached False from stub)
-            try:
-                from tts.tts_engine import TTSEngine
-                TTSEngine._import_check_cache.pop('_torch_cuda', None)
+                            from tts.package_installer import install_cuda_torch
+                            def _progress(msg):
+                                logging.info(f"CUDA torch: {msg}")
+                                try:
+                                    from integrations.social.realtime import publish_event
+                                    publish_event('setup_progress', {
+                                        'type': 'setup_progress',
+                                        'job_type': 'cuda_torch',
+                                        'status': 'loading',
+                                        'message': msg,
+                                    })
+                                except Exception:
+                                    pass
+                            ok, msg = install_cuda_torch(progress_cb=_progress)
+                            if ok:
+                                logging.info("CUDA torch installed — GPU TTS available on next launch")
+                        except Exception as e:
+                            logging.debug(f"CUDA torch background install failed: {e}")
+                    import threading
+                    threading.Thread(target=_bg_cuda_install, daemon=True,
+                                     name='CUDATorchInstall').start()
             except Exception:
                 pass
 

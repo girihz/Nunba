@@ -85,8 +85,10 @@ _isolate_frozen_imports()
 # Program Files is read-only for non-admin. Packages installed at runtime
 # (e.g. CUDA torch, TTS engines) go to ~/.nunba/site-packages/ instead.
 _user_sp = os.path.join(os.path.expanduser('~'), '.nunba', 'site-packages')
-if os.path.isdir(_user_sp) and _user_sp not in sys.path:
+os.makedirs(_user_sp, exist_ok=True)
+if _user_sp not in sys.path:
     sys.path.insert(0, _user_sp)
+
 
 # === Single-instance guard ===
 # Prevent multiple Nunba processes (Windows auto-start + manual launch).
@@ -321,10 +323,10 @@ if getattr(sys, 'frozen', False):
     # module with a stub so autogen's import doesn't crash the chain.
     try:
         import torch as _torch_test
-        # torch loaded OK — no fix needed (shouldn't happen in frozen, but be safe)
+        # torch loaded OK (bundled CPU torch or user-installed CUDA torch)
         del _torch_test
     except (ImportError, ModuleNotFoundError):
-        pass  # torch not installed at all — fine, autogen will skip it
+        pass  # torch not installed at all — shouldn't happen with bundled CPU torch
     except (AttributeError, OSError, RuntimeError):
         # torch partially initialized or DLL load failure — stub it out.
         # Must be comprehensive: downstream code (CLIPBackend, rl_ef, VibeVoice)
@@ -5158,23 +5160,23 @@ def main():
         logger.error(traceback.format_exc())
 
     # Wait for Flask to be ready before proceeding to webview.
-    # On Windows auto-start the system is still booting — Flask takes longer.
+    # Uses raw socket connect (not urllib) to avoid Windows proxy/firewall
+    # issues where urllib.request can't reach localhost in frozen builds.
     _splash_update('Waiting for server...')
     _flask_ready = False
-    _max_wait = 30 if args.background else 15  # longer timeout on auto-start
-    for _attempt in range(_max_wait * 2):  # check every 0.5s
+    _max_wait = 30 if args.background else 15
+    import socket as _wait_sock
+    for _attempt in range(_max_wait * 2):
         try:
-            import urllib.request
-            _resp = urllib.request.urlopen(
-                f"http://127.0.0.1:{args.port}/backend/health", timeout=2
-            )
-            _resp.close()
+            _s = _wait_sock.socket(_wait_sock.AF_INET, _wait_sock.SOCK_STREAM)
+            _s.settimeout(1)
+            _s.connect(('127.0.0.1', args.port))
+            _s.close()
             _flask_ready = True
             logger.info(f"Flask server ready after {_attempt * 0.5:.1f}s")
             break
-        except Exception:
+        except (ConnectionRefusedError, TimeoutError, OSError):
             pass
-        # Keep splash responsive while waiting
         try:
             if _splash_root:
                 _safe_tk_update(_splash_root)
@@ -5412,12 +5414,14 @@ def main():
                     _local_url = f"http://localhost:{args.port}/local"
                     _MAX_ATTEMPTS = 3
 
-                    # ── Wait for Flask to be ready ──
-                    import urllib.request as _ur
-                    for _ in range(15):  # poll up to 7.5s
+                    # ── Wait for Flask to be ready (raw socket, avoids proxy issues) ──
+                    import socket as _bg_sock
+                    for _ in range(15):
                         try:
-                            _r = _ur.urlopen(f"http://127.0.0.1:{args.port}/backend/health", timeout=2)
-                            _r.close()
+                            _bgs = _bg_sock.socket(_bg_sock.AF_INET, _bg_sock.SOCK_STREAM)
+                            _bgs.settimeout(1)
+                            _bgs.connect(('127.0.0.1', args.port))
+                            _bgs.close()
                             break
                         except Exception:
                             time.sleep(0.5)
@@ -5444,6 +5448,7 @@ def main():
                         logger.info(f"[BACKGROUND] Mount check #{attempt + 1}: {state}")
 
                         if state == 'mounted':
+                            _page_loaded_ok[0] = True
                             # React is up but CSS transitions (opacity, blur) may not
                             # have fired — WebView2 suspends CSS animations while hidden.
                             # Force all transition-dependent elements to their final state.
@@ -5537,18 +5542,18 @@ def main():
             threading.Thread(target=_deferred_flask_reload, daemon=True).start()
             logger.info("[DEFERRED] Started background Flask poller for delayed reload")
 
-        # Blank-page recovery — if the webview loads but shows an error/blank page
-        # (connection refused, about:blank, or empty body), retry up to 3 times.
+        # Shared reload guard — prevents multiple recovery paths from reloading simultaneously
+        _page_loaded_ok = [False]  # set True when React mounts successfully
         _page_recovery_count = [0]
         _recovery_port = args.port
 
         def _on_loaded_recovery():
-            if _page_recovery_count[0] >= 3:
+            if _page_recovery_count[0] >= 3 or _page_loaded_ok[0]:
                 return
-            # Defer check — React mounts async after the HTML shell loads.
-            # Checking #root immediately always finds it empty → false reload.
             def _deferred_check():
                 time.sleep(3)
+                if _page_loaded_ok[0]:
+                    return
                 _do_recovery_check()
             threading.Thread(target=_deferred_check, daemon=True).start()
 
@@ -5591,8 +5596,9 @@ def main():
 
                     threading.Thread(target=_do_reload, daemon=True).start()
                 else:
-                    # Page loaded normally — stop checking
+                    # Page loaded normally — stop all recovery paths
                     _page_recovery_count[0] = 3
+                    _page_loaded_ok[0] = True
             except Exception:
                 pass
 
