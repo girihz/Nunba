@@ -272,9 +272,6 @@ build_exe_options = {
         "shutil",
         "winreg",
         "tkinter",  # Full package tree — ensures messagebox, filedialog etc. are included
-        # unittest: NOT in packages — causes stack overflow when included as a package
-        # in cx_Freeze (deeply recursive mock imports). Instead, kept out of excludes
-        # so cx_Freeze auto-detects it when transformers imports it.
         "flask_cors",
         "pyautogui",
         "PIL",
@@ -353,7 +350,7 @@ build_exe_options = {
     "zip_includes": [],
     "build_exe": "build/Nunba",
     "excludes": [
-        "test", "tests",  # Keep unittest — needed by transformers (Indic Parler TTS dep)
+        "unittest", "test", "tests",
         "shapely.plotting", "shapely.tests",
         # Exclude large unnecessary packages
         "cv2", "opencv",  # pyautogui uses PIL.ImageGrab on Windows, not cv2
@@ -1132,6 +1129,35 @@ if 'build' in sys.argv or 'build_exe' in sys.argv:
             _lp = os.path.join(_di, _leak)
             if os.path.isfile(_lp):
                 os.remove(_lp)
+
+# ── Post-build: increase exe stack size ──
+# cx_Freeze frozen builds with 15K+ modules cause deep import chains that
+# overflow the default 1MB thread stack. Patch the PE header to 8MB.
+if 'build' in sys.argv or 'build_exe' in sys.argv:
+    _build_dir_pe = os.path.abspath(build_exe_options["build_exe"])
+    _exe_pe = os.path.join(_build_dir_pe, "Nunba.exe")
+    if os.path.isfile(_exe_pe):
+        try:
+            import struct as _struct
+            with open(_exe_pe, 'rb') as _f:
+                _pe_data = bytearray(_f.read())
+            _pe_off = _struct.unpack_from('<I', _pe_data, 0x3C)[0]
+            _pe_magic = _struct.unpack_from('<H', _pe_data, _pe_off + 0x18)[0]
+            if _pe_magic == 0x20B:  # PE32+ (64-bit)
+                _stack_off = _pe_off + 0x18 + 0x48
+                _fmt = '<Q'
+            else:  # PE32 (32-bit)
+                _stack_off = _pe_off + 0x18 + 0x44
+                _fmt = '<I'
+            _old_stack = _struct.unpack_from(_fmt, _pe_data, _stack_off)[0]
+            _new_stack = 8 * 1024 * 1024  # 8MB
+            _struct.pack_into(_fmt, _pe_data, _stack_off, _new_stack)
+            with open(_exe_pe, 'wb') as _f:
+                _f.write(_pe_data)
+            print(f"Post-build: stack reserve {_old_stack // 1024}KB -> "
+                  f"{_new_stack // 1024 // 1024}MB")
+        except Exception as _e:
+            print(f"WARNING: could not patch stack size: {_e}")
 
 # ── Post-build validation: run Nunba.exe --validate in the frozen environment ──
 if 'build' in sys.argv or 'build_exe' in sys.argv:
