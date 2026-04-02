@@ -16,7 +16,8 @@ WAMP topic: com.hertzai.hevolve.fleet.{deviceId}
 import logging
 import time
 from datetime import datetime, timedelta
-from flask import Blueprint, request, jsonify
+
+from flask import Blueprint, jsonify, request
 
 logger = logging.getLogger(__name__)
 

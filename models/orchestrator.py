@@ -234,8 +234,8 @@ class STTLoader(ModelLoader):
     def load(self, entry: ModelEntry, run_mode: str) -> bool:
         # Set the actual model size in whisper_tool using its existing mapping
         try:
-            from integrations.service_tools.whisper_tool import _CATALOG_ID_TO_FASTER_WHISPER_SIZE
             import integrations.service_tools.whisper_tool as wt
+            from integrations.service_tools.whisper_tool import _CATALOG_ID_TO_FASTER_WHISPER_SIZE
             size = _CATALOG_ID_TO_FASTER_WHISPER_SIZE.get(entry.id)
             if size:
                 wt._FASTER_WHISPER_MODEL_SIZE = size
