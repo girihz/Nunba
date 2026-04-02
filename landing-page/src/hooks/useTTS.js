@@ -356,8 +356,21 @@ export function useTTS(options = {}) {
         }
         return url;
       } catch (err) {
-        setError(err.message);
-        return null;
+        // Server TTS failed — fall back to browser Web Speech API
+        // (works for most languages, lower quality but better than silence)
+        try {
+          const utter = new SpeechSynthesisUtterance(text);
+          utter.lang = lang;
+          utter.rate = 0.9;
+          utter.onend = () => setIsSpeaking(false);
+          utter.onerror = () => setIsSpeaking(false);
+          window.speechSynthesis.speak(utter);
+          setIsSpeaking(true);
+          return 'webspeech';
+        } catch {
+          setError(err.message);
+          return null;
+        }
       } finally {
         setIsLoading(false);
       }
