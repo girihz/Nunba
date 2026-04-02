@@ -639,7 +639,7 @@ def call_stop_api():
                                 logger.info(f"Using speific stop for user_id={user_id}, prompt_id={prompt_id}")
                             else:
                                 logger.info(f"Using user-specific stop for user_id={user_id}")
-                
+
                 except Exception as e:
                     logger.error(f"Error reading user data: {str(e)}")
             else:
@@ -648,7 +648,7 @@ def call_stop_api():
                 logger.error(f"Error preparing stop payload: {str(e)}")
                 stop_payload = {}
 
-                
+
         # Make the API Call
         logger.info(f"Calling the stop API at {args.stop_api_url} with payload: {stop_payload}")
 
@@ -678,11 +678,11 @@ def call_stop_api():
     except Exception as e:
         logger.error(f"Error calling stop API: {str(e)}")
         logger.error(traceback.format_exc())
-        return False  
+        return False
 
 # Get or generate device ID at startup
 DEVICE_ID = get_device_id()
-logging.info(f"Device ID: {DEVICE_ID}")     
+logging.info(f"Device ID: {DEVICE_ID}")
 
 @app.route('/probe', methods=['GET'])
 def probe_endpoint():
@@ -732,7 +732,7 @@ def execute_command():
             if (time.time() - last_activity_time) > ACTIVITY_TIMEOUT:
                 llm_control_active = False
                 toggle_indicator(False)
-        
+
         timeout_thread = threading.Thread(target=reset_after_timeout, daemon=True)
         timeout_thread.start()
 
@@ -749,8 +749,8 @@ def execute_command():
         logging.info(f"Executing command: {command}")
 
         # Check if this is a Python command that we should intercept
-        if (not shell and len(command) >= 2 and 
-            (command[0] == "python" or command[0] == "python3") and 
+        if (not shell and len(command) >= 2 and
+            (command[0] == "python" or command[0] == "python3") and
             ("-c" in command or "-m" in command)):
             # Try to use embedded Python
             embedded_python = get_embedded_python_path()
@@ -785,20 +785,20 @@ def execute_command():
             # Add environment variables
             env = os.environ.copy()
             result = subprocess.run(
-                command, 
-                stdout=subprocess.PIPE, 
-                stderr=subprocess.PIPE, 
-                shell=shell, 
-                text=True, 
-                timeout=120, 
-                env=env, 
-                startupinfo=startupinfo, 
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                shell=shell,
+                text=True,
+                timeout=120,
+                env=env,
+                startupinfo=startupinfo,
                 creationflags=creation_flags)
             logging.info(f"Command executed with return code: {result.returncode}")
 
             # After executing the command, update the timestamp again to extend the indicator display
             last_activity_time = time.time()
-            
+
             return jsonify({
                 'status': 'success',
                 'output': result.stdout,
@@ -837,7 +837,7 @@ def capture_screen_with_cursor():
                 screenshot.paste(cursor, (cursor_x, cursor_y), cursor)
             except Exception as e:
                 logging.error(f"Failed to process cursor image: {str(e)}")
-    
+
 
         # Convert PIL Image to bytes and send
         img_io = BytesIO()
@@ -858,7 +858,7 @@ def stop_ai_control_endpoint():
 
     try:
         logger.info("Stop AI Control request received")
-        
+
         # Just hide the indicator
         llm_control_active = False
         toggle_indicator(False)
@@ -878,17 +878,17 @@ def stop_ai_control_endpoint():
                 "status": "indicator hidden but stop request failed",
                 "error": "Failed to send stop request to server"
             })
-            
+
     except Exception as e:
         logger.error(f"Error stopping AI Control: {str(e)}")
         logger.error(traceback.format_exc())
-        
+
         # Even if we fail, try to hide the indicator
         try:
             toggle_indicator(False)
         except Exception:
             pass
-            
+
         return jsonify({"success": False, "error": str(e)})
 
 @app.route('/llm_control_status', methods=["GET"])
@@ -899,7 +899,7 @@ def llm_control_status():
     if llm_control_active and (time.time() - last_activity_time) > ACTIVITY_TIMEOUT:
         llm_control_active = False
         toggle_indicator(False)
-    
+
     return jsonify({
         'active': llm_control_active,
         'last_activity': last_activity_time,

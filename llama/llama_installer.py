@@ -307,7 +307,10 @@ class LlamaInstaller:
                 si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 si.wShowWindow = 0
                 cf = subprocess.CREATE_NO_WINDOW
-            result = subprocess.run([cmd, "llama-server"], capture_output=True, text=True, startupinfo=si, creationflags=cf)
+            result = subprocess.run(
+                [cmd, "llama-server"],
+                capture_output=True, text=True,
+                startupinfo=si, creationflags=cf)
             if result.returncode == 0 and result.stdout.strip():
                 path = result.stdout.strip().split('\n')[0]
                 logger.info(f"Found llama-server in PATH: {path}")
@@ -979,7 +982,9 @@ class LlamaInstaller:
                     if progress_callback:
                         downloaded_mb = downloaded // (1024 * 1024)
                         total_mb = total // (1024 * 1024)
-                        progress_callback(downloaded_mb, total_mb, f"Downloading model... {downloaded_mb}MB / {total_mb}MB")
+                        progress_callback(
+                            downloaded_mb, total_mb,
+                            f"Downloading model... {downloaded_mb}MB / {total_mb}MB")
 
                 self.download_file_with_progress(model_url, model_path, model_progress)
 
@@ -997,7 +1002,9 @@ class LlamaInstaller:
                         if progress_callback:
                             downloaded_mb = downloaded // (1024 * 1024)
                             total_mb = total // (1024 * 1024)
-                            progress_callback(downloaded_mb, total_mb, f"Downloading vision projector... {downloaded_mb}MB / {total_mb}MB")
+                            progress_callback(
+                                downloaded_mb, total_mb,
+                                f"Downloading vision projector... {downloaded_mb}MB / {total_mb}MB")
 
                     self.download_file_with_progress(mmproj_url, mmproj_path, mmproj_progress)
 

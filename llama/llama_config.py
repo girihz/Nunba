@@ -30,21 +30,21 @@ class ServerType:
 
 # Common LLM endpoints to scan
 KNOWN_LLM_ENDPOINTS = [
-    # Ollama
-    {"name": "Ollama", "base_url": "http://localhost:11434", "health": "/api/tags", "completions": "/api/generate", "type": "ollama"},
-    # LM Studio
-    {"name": "LM Studio", "base_url": "http://localhost:1234", "health": "/v1/models", "completions": "/v1/completions", "type": "openai"},
-    # LocalAI
-    {"name": "LocalAI", "base_url": "http://localhost:8080", "health": "/v1/models", "completions": "/v1/completions", "type": "openai"},
-    # text-generation-webui (oobabooga) — port 5000 excluded because Nunba's
-    # own Flask server runs there. Scanning it falsely detects Flask as TG-WebUI.
-    {"name": "Text Generation WebUI", "base_url": "http://localhost:7860", "health": "/v1/models", "completions": "/v1/completions", "type": "openai"},
-    # vLLM
-    {"name": "vLLM", "base_url": "http://localhost:8000", "health": "/v1/models", "completions": "/v1/completions", "type": "openai"},
-    # KoboldCpp
-    {"name": "KoboldCpp", "base_url": "http://localhost:5001", "health": "/api/v1/model", "completions": "/api/v1/generate", "type": "kobold"},
-    # Jan.ai
-    {"name": "Jan", "base_url": "http://localhost:1337", "health": "/v1/models", "completions": "/v1/chat/completions", "type": "openai"},
+    {"name": "Ollama", "base_url": "http://localhost:11434",
+     "health": "/api/tags", "completions": "/api/generate", "type": "ollama"},
+    {"name": "LM Studio", "base_url": "http://localhost:1234",
+     "health": "/v1/models", "completions": "/v1/completions", "type": "openai"},
+    {"name": "LocalAI", "base_url": "http://localhost:8080",
+     "health": "/v1/models", "completions": "/v1/completions", "type": "openai"},
+    # Port 5000 excluded — Nunba's own Flask runs there
+    {"name": "Text Generation WebUI", "base_url": "http://localhost:7860",
+     "health": "/v1/models", "completions": "/v1/completions", "type": "openai"},
+    {"name": "vLLM", "base_url": "http://localhost:8000",
+     "health": "/v1/models", "completions": "/v1/completions", "type": "openai"},
+    {"name": "KoboldCpp", "base_url": "http://localhost:5001",
+     "health": "/api/v1/model", "completions": "/api/v1/generate", "type": "kobold"},
+    {"name": "Jan", "base_url": "http://localhost:1337",
+     "health": "/v1/models", "completions": "/v1/chat/completions", "type": "openai"},
 ]
 
 
@@ -437,14 +437,19 @@ class LlamaConfig:
         # ── Human-readable message ─────────────────────────────────
         msgs = {
             'start': f'{best_preset.display_name} is ready — starting with {diag["run_mode"].upper()}.',
-            'start_cpu': f'GPU is {"occupied by another model" if diag["gpu_occupied"] else "not available for inference"}. '
-                         f'Starting {best_preset.display_name} in CPU mode.',
-            'upgrade_binary': f'GPU detected ({diag["gpu_name"] or diag["gpu_type"]}) but llama.cpp is CPU-only. Upgrading to CUDA build.',
+            'start_cpu': (
+                f'GPU is {"occupied by another model" if diag["gpu_occupied"] else "not available"}. '
+                f'Starting {best_preset.display_name} in CPU mode.'),
+            'upgrade_binary': (
+                f'GPU detected ({diag["gpu_name"] or diag["gpu_type"]}) '
+                f'but llama.cpp is CPU-only. Upgrading to CUDA build.'),
             'downgrade_model': f'{best_preset.display_name} ({best_preset.size_mb}MB) is too big for '
                                f'{diag["compute_budget_mb"]}MB budget. Selecting a smaller model.',
             'download_model': f'No suitable model found on disk. Recommend downloading '
                               f'{best_preset.display_name} ({best_preset.size_mb}MB).',
-            'download_mmproj': f'{best_preset.display_name} found but vision projector (mmproj) is missing. Downloading it.',
+            'download_mmproj': (
+                f'{best_preset.display_name} found but vision projector '
+                f'(mmproj) is missing. Downloading it.'),
             'install_binary': 'llama.cpp server not found. Installing it.',
             'download_all': 'No local LLM setup found. Need to download model and install llama.cpp.',
         }
@@ -721,7 +726,7 @@ class LlamaConfig:
         port = self.config.get('server_port', 8080)
         try:
             req = urllib.request.Request(f'http://127.0.0.1:{port}/health', method='GET')
-            with urllib.request.urlopen(req, timeout=2) as resp:
+            with urllib.request.urlopen(req, timeout=2):
                 return True  # 200 = healthy
         except urllib.request.HTTPError:
             return True  # 500/503 = server exists, model loading
@@ -1320,7 +1325,11 @@ class LlamaConfig:
                         _usage = _bench_resp.get("usage", {})
                         _compl_tokens = _usage.get("completion_tokens", 0)
                         _tps = _compl_tokens / max(_t1 - _t0, 0.01)
-                        logger.info(f"Quick benchmark: {_compl_tokens} tokens in {_t1 - _t0:.1f}s = {_tps:.1f} t/s ({model_preset.display_name}, {'GPU' if can_use_gpu else 'CPU'})")
+                        _mode = 'GPU' if can_use_gpu else 'CPU'
+                        logger.info(
+                            f"Quick benchmark: {_compl_tokens} tokens in "
+                            f"{_t1 - _t0:.1f}s = {_tps:.1f} t/s "
+                            f"({model_preset.display_name}, {_mode})")
                     except Exception as _bench_err:
                         logger.debug(f"Quick benchmark skipped: {_bench_err}")
                     return True
