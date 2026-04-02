@@ -122,16 +122,44 @@ def is_package_installed(import_name: str) -> bool:
 
 
 def is_cuda_torch() -> bool:
-    """Check if installed torch has CUDA support."""
+    """Check if CUDA torch exists — checks user site-packages first.
+
+    The frozen build ships a torch 0.0.0 stub at python-embed/ which shadows
+    the real CUDA torch at ~/.nunba/site-packages/. Check the file on disk
+    rather than importing (which would find the stub).
+    """
+    user_torch = os.path.join(get_user_site_packages(), 'torch', 'version.py')
+    if os.path.isfile(user_torch):
+        try:
+            with open(user_torch) as f:
+                content = f.read()
+            if '+cu' in content:
+                return True
+        except Exception:
+            pass
+    # Fallback: try import (works when not in frozen build)
     try:
         import torch
         return torch.cuda.is_available()
-    except ImportError:
+    except (ImportError, AttributeError):
         return False
 
 
 def get_torch_variant() -> str:
-    """Return 'cpu', 'cu124', etc. for the installed torch."""
+    """Return 'cpu', 'cu124', etc. — checks user site-packages first."""
+    user_torch = os.path.join(get_user_site_packages(), 'torch', 'version.py')
+    if os.path.isfile(user_torch):
+        try:
+            with open(user_torch) as f:
+                for line in f:
+                    if '__version__' in line and '+' in line:
+                        ver = line.split("'")[1] if "'" in line else line.split('"')[1]
+                        if '+cpu' in ver:
+                            return 'cpu'
+                        if '+cu' in ver:
+                            return ver.split('+')[1]
+        except Exception:
+            pass
     try:
         import torch
         ver = torch.__version__
