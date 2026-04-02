@@ -2388,41 +2388,35 @@ def start_background_services():
             except Exception:
                 pass
 
-            # CPU torch is bundled. If GPU detected, install CUDA torch to
-            # ~/.nunba/site-packages/ in the background. It shadows the bundled
-            # CPU torch via sys.path on the NEXT launch (C extension can't reload
-            # in same process). This session uses CPU torch; next session uses GPU.
+            # If GPU detected but CUDA torch not installed, install it NOW
+            # (blocking) so GPU TTS works on first launch. Shows progress via
+            # WAMP push so the UI can display download status.
             try:
                 from tts.package_installer import has_nvidia_gpu, is_cuda_torch
                 if has_nvidia_gpu() and not is_cuda_torch():
-                    logging.info("TTS: GPU detected — downloading CUDA PyTorch in background...")
-                    def _bg_cuda_install():
+                    logging.info("TTS: GPU detected — installing CUDA PyTorch (first launch, ~2.5GB)...")
+                    from tts.package_installer import install_gpu_torch
+                    def _progress(msg):
+                        logging.info(f"CUDA torch: {msg}")
                         try:
-                            from tts.package_installer import install_gpu_torch
-                            def _progress(msg):
-                                logging.info(f"CUDA torch: {msg}")
-                                try:
-                                    from integrations.social.realtime import publish_event
-                                    publish_event('setup_progress', {
-                                        'type': 'setup_progress',
-                                        'job_type': 'cuda_torch',
-                                        'status': 'loading',
-                                        'message': msg,
-                                    })
-                                except Exception:
-                                    pass
-                            ok, msg = install_gpu_torch(progress_cb=_progress)
-                            if ok:
-                                logging.info("CUDA torch installed — GPU TTS available on next launch")
-                        except Exception as e:
-                            logging.debug(f"CUDA torch background install failed: {e}")
-                    import threading
-                    threading.Thread(target=_bg_cuda_install, daemon=True,
-                                     name='CUDATorchInstall').start()
+                            from integrations.social.realtime import publish_event
+                            publish_event('setup_progress', {
+                                'type': 'setup_progress',
+                                'job_type': 'cuda_torch',
+                                'status': 'loading',
+                                'message': msg,
+                            })
+                        except Exception:
+                            pass
+                    ok, msg = install_gpu_torch(progress_cb=_progress)
+                    if ok:
+                        logging.info("CUDA torch installed — GPU TTS ready this session")
+                    else:
+                        logging.warning(f"CUDA torch install failed: {msg} — using CPU TTS")
             except Exception:
                 pass
 
-            # Trigger language-based engine selection (loads GPU model)
+            # Trigger language-based engine selection (loads GPU model if CUDA torch available)
             logging.info(f"TTS warm-up: user prefers '{preferred_lang}', selecting GPU engine...")
             engine.set_language(preferred_lang)
 
