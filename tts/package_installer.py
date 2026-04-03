@@ -239,7 +239,10 @@ def _run_pip(args: list[str], progress_cb: Callable | None = None,
     # instead of Program Files (which needs admin)
     user_sp = get_user_site_packages()
     if args and args[0] == 'install':
-        args = args[:1] + ['--target', user_sp] + args[1:]
+        args = args[:1] + [
+            '--target', user_sp,
+            '--no-build-isolation',  # Use system setuptools (pip's isolated build fails in frozen builds)
+        ] + args[1:]
 
     cmd = [python_exe, '-m', 'pip'] + args
     env = os.environ.copy()
