@@ -218,6 +218,7 @@ var VoiceVisualizer = function({ audioRef, isActive, size, style }) {
 
   return React.createElement('div', {
     style: Object.assign({
+      width: '100%', height: '100%',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       flexDirection: 'column',
     }, style || {}),
@@ -225,7 +226,7 @@ var VoiceVisualizer = function({ audioRef, isActive, size, style }) {
     React.createElement('canvas', {
       ref: canvasRef,
       width: size * 2, height: size * 2,
-      style: { width: size, height: size },
+      style: { width: size, height: size, maxWidth: '80%', maxHeight: '80%' },
     }),
     isActive ? React.createElement('div', {
       style: {
