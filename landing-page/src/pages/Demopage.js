@@ -3647,7 +3647,7 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
                               style={{display: 'none'}}
                             />
                           )}
-                          <div className="sticky top-0 z-10 flex justify-center items-center bg-black"
+                          <div className="sticky top-0 flex justify-center items-center bg-black"
                             style={{ height: window.innerWidth <= 768 ? '35vh' : '100%' }}>
                             <VoiceVisualizer
                               audioRef={audioRef}
@@ -3830,7 +3830,7 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
                       </div>
                     </div>
                   )}
-                  <div className="fixed inset-0 flex items-center justify-center pointer-events-none" style={{zIndex: 1}}>
+                  <div className="fixed inset-0 flex items-center justify-center pointer-events-none" style={{zIndex: 5}}>
                    <div className="pointer-events-auto">
                     {agentsLoading ? (
                       /* ── Loading skeleton while agents are being fetched ── */
