@@ -5841,6 +5841,22 @@ window.addEventListener('unhandledrejection', function(e) {
                     logger.debug(f"[SHOWN] Navigation check failed: {_e}")
             _window.events.shown += _on_shown_navigate
 
+            # Background mode: WebView2 doesn't navigate when hidden=True.
+            # Force-load the URL after webview.start() begins, with a delay.
+            # This ensures the page is loaded BEFORE the user shows the window.
+            if start_hidden:
+                def _preload_hidden_page():
+                    time.sleep(3)  # wait for webview.start() to init WebView2
+                    try:
+                        _cur = _window.get_current_url() or ''
+                        if not _cur or 'about:blank' in _cur:
+                            logger.info("[BACKGROUND] Pre-loading /local into hidden webview")
+                            _window.load_url(initial_url)
+                    except Exception as _e:
+                        logger.debug(f"[BACKGROUND] Pre-load failed: {_e}")
+                threading.Thread(target=_preload_hidden_page, daemon=True,
+                                 name='bg-preload').start()
+
             try:
                 logger.info(f"Starting webview with EdgeChromium backend, storage: {_webview_data_dir}")
                 webview.start(gui='edgechromium', storage_path=_webview_data_dir, private_mode=False)
