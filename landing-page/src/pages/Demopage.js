@@ -3598,7 +3598,7 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
 
         <div className="flex flex-col h-screen bg-black w-full overflow-hidden">
           {/* VoiceVisualizer removed from here — lives in the media column */}
-          <div className="w-full flex flex-col md:flex-row-reverse flex-1 overflow-hidden">
+          <div className="w-full flex flex-col md:flex-row-reverse flex-1 min-h-0">
             {/* Chat/Messages section - Now on the left for wider screens */}
 
             <div
@@ -3757,8 +3757,7 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
                 !isTextMode && videoUrl && !uploadedImage && !uploadedPdf && window.innerWidth > 768
                   ? 'md:w-[60%]'
                   : 'md:w-full'
-              } overflow-x-clip overflow-y-auto scrollbar-hide pt-10 md:pt-0`}
-              style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+              } overflow-x-clip overflow-y-auto pt-2 md:pt-0`}
             >
               {messages.length === 0 ? (
                 <>
