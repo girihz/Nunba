@@ -5351,16 +5351,35 @@ def main():
         # This fires on the first `loaded` event and forces opacity/transitions.
         _mount_guard_fired = [False]
 
+        def _safe_eval_js(js_code, max_retries=5):
+            """evaluate_js with retry — WebView2 may not be ready on first on_loaded."""
+            for attempt in range(max_retries):
+                try:
+                    result = _window.evaluate_js(js_code)
+                    return result
+                except Exception as e:
+                    err_msg = str(e)
+                    if 'failed to start' in err_msg.lower() or 'not ready' in err_msg.lower():
+                        delay = (attempt + 1) * 2  # 2s, 4s, 6s, 8s, 10s
+                        logger.debug(f"[EVAL_JS] Retry {attempt+1}/{max_retries} in {delay}s: {err_msg}")
+                        time.sleep(delay)
+                    else:
+                        raise  # non-recoverable error
+            logger.warning(f"[EVAL_JS] All {max_retries} retries failed")
+            return None
+
         def _on_any_loaded():
             if _mount_guard_fired[0]:
                 return
             _mount_guard_fired[0] = True
+            logger.info("[MOUNT_GUARD] on_loaded fired — starting mount check")
 
             def _mount_guard():
-                # Wait for React to settle after page load
-                time.sleep(2.0)
+                # Wait for WebView2 JS bridge to be ready
+                time.sleep(3.0)
+                logger.info("[MOUNT_GUARD] Checking React mount state...")
                 try:
-                    state = _window.evaluate_js(
+                    state = _safe_eval_js(
                         "(function(){"
                         "  var r = document.getElementById('root');"
                         "  if (!r) return 'no_root';"
