@@ -1264,6 +1264,215 @@ def admin_models_swap():
         return jsonify({"error": str(e)}), 500
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Provider Management Admin API  (/api/admin/providers/*)
+# Exposes HARTOS ProviderRegistry + Gateway + EfficiencyMatrix
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route('/api/admin/providers', methods=['GET'])
+def admin_providers_list():
+    """List all providers with status, model count, and capabilities."""
+    try:
+        from integrations.providers.registry import get_registry
+        reg = get_registry()
+        category = request.args.get('category', '')
+        ptype = request.args.get('type', '')  # api, affiliate, local
+
+        providers = reg.list_all()
+        if category:
+            providers = [p for p in providers if category in p.categories]
+        if ptype:
+            providers = [p for p in providers if p.provider_type == ptype]
+
+        result = []
+        for p in providers:
+            result.append({
+                'id': p.id,
+                'name': p.name,
+                'provider_type': p.provider_type,
+                'url': p.url,
+                'categories': p.categories,
+                'tags': p.tags,
+                'model_count': len(p.models),
+                'api_key_set': p.has_api_key(),
+                'enabled': p.enabled,
+                'healthy': p.healthy,
+                'commission_pct': p.commission_pct,
+                'commission_type': p.commission_type,
+                'avg_latency_ms': p.avg_latency_ms,
+            })
+        return jsonify({'success': True, 'providers': result})
+    except ImportError:
+        return jsonify({'error': 'Provider gateway not available'}), 503
+
+
+@app.route('/api/admin/providers/<provider_id>', methods=['GET'])
+def admin_providers_get(provider_id):
+    """Get full provider details including all models and pricing."""
+    try:
+        from integrations.providers.registry import get_registry
+        reg = get_registry()
+        p = reg.get(provider_id)
+        if not p:
+            return jsonify({'error': 'Provider not found'}), 404
+        data = p.to_dict()
+        data['api_key_set'] = p.has_api_key()
+        return jsonify({'success': True, 'provider': data})
+    except ImportError:
+        return jsonify({'error': 'Provider gateway not available'}), 503
+
+
+@app.route('/api/admin/providers/<provider_id>/api-key', methods=['POST'])
+def admin_providers_set_key(provider_id):
+    """Set or update API key for a provider."""
+    try:
+        from integrations.providers.registry import get_registry
+        data = request.get_json(force=True)
+        api_key = data.get('api_key', '')
+        if not api_key:
+            return jsonify({'error': 'api_key required'}), 400
+        reg = get_registry()
+        success = reg.set_api_key(provider_id, api_key)
+        if not success:
+            return jsonify({'error': 'Provider not found or no env_key configured'}), 404
+        return jsonify({'success': True})
+    except ImportError:
+        return jsonify({'error': 'Provider gateway not available'}), 503
+
+
+@app.route('/api/admin/providers/<provider_id>/api-key', methods=['DELETE'])
+def admin_providers_remove_key(provider_id):
+    """Remove API key for a provider."""
+    try:
+        from integrations.providers.registry import get_registry
+        reg = get_registry()
+        p = reg.get(provider_id)
+        if not p or not p.env_key:
+            return jsonify({'error': 'Provider not found'}), 404
+        os.environ.pop(p.env_key, None)
+        p.api_key_set = False
+        reg.save()
+        return jsonify({'success': True})
+    except ImportError:
+        return jsonify({'error': 'Provider gateway not available'}), 503
+
+
+@app.route('/api/admin/providers/<provider_id>/test', methods=['POST'])
+def admin_providers_test(provider_id):
+    """Test provider connection with a simple request."""
+    try:
+        from integrations.providers.gateway import get_gateway
+        gw = get_gateway()
+        result = gw.generate(
+            'Say "hello" in one word.',
+            model_type='llm',
+            provider_id=provider_id,
+            max_tokens=10,
+            temperature=0,
+        )
+        return jsonify({
+            'success': result.success,
+            'content': result.content[:200] if result.content else '',
+            'latency_ms': round(result.latency_ms, 1),
+            'cost_usd': result.cost_usd,
+            'error': result.error,
+        })
+    except ImportError:
+        return jsonify({'error': 'Provider gateway not available'}), 503
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin/providers/<provider_id>/enable', methods=['POST'])
+def admin_providers_enable(provider_id):
+    """Enable or disable a provider."""
+    try:
+        from integrations.providers.registry import get_registry
+        data = request.get_json(force=True)
+        enabled = data.get('enabled', True)
+        reg = get_registry()
+        p = reg.get(provider_id)
+        if not p:
+            return jsonify({'error': 'Provider not found'}), 404
+        p.enabled = enabled
+        reg.save()
+        return jsonify({'success': True, 'enabled': p.enabled})
+    except ImportError:
+        return jsonify({'error': 'Provider gateway not available'}), 503
+
+
+@app.route('/api/admin/providers/gateway/stats', methods=['GET'])
+def admin_providers_gateway_stats():
+    """Get gateway usage stats: total cost, requests, recent activity."""
+    try:
+        from integrations.providers.gateway import get_gateway
+        return jsonify({'success': True, **get_gateway().get_stats()})
+    except ImportError:
+        return jsonify({'error': 'Provider gateway not available'}), 503
+
+
+@app.route('/api/admin/providers/efficiency/leaderboard', methods=['GET'])
+def admin_providers_leaderboard():
+    """Get efficiency leaderboard — ranked by speed, quality, cost."""
+    try:
+        from integrations.providers.efficiency_matrix import get_matrix
+        model_type = request.args.get('model_type', 'llm')
+        sort_by = request.args.get('sort_by', 'efficiency')
+        entries = get_matrix().get_leaderboard(model_type, sort_by)
+        from dataclasses import asdict
+        return jsonify({
+            'success': True,
+            'leaderboard': [asdict(e) for e in entries[:20]],
+            'summary': get_matrix().get_matrix_summary(),
+        })
+    except ImportError:
+        return jsonify({'error': 'Efficiency matrix not available'}), 503
+
+
+@app.route('/api/admin/providers/capabilities', methods=['GET'])
+def admin_providers_capabilities():
+    """Get capabilities summary: what model types Nunba can serve right now."""
+    try:
+        from integrations.providers.registry import get_registry
+        return jsonify({
+            'success': True,
+            'capabilities': get_registry().get_capabilities_summary(),
+        })
+    except ImportError:
+        return jsonify({'error': 'Provider registry not available'}), 503
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Resource Monitor Admin API  (/api/admin/resources/*)
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route('/api/admin/resources/stats', methods=['GET'])
+def admin_resources_stats():
+    """Get current resource usage: CPU, RAM, GPU, throttle, mode."""
+    try:
+        from core.resource_governor import get_governor
+        gov = get_governor()
+        stats = gov.get_stats()
+        # Add live system metrics
+        try:
+            import psutil
+            stats['cpu_percent'] = psutil.cpu_percent(interval=None)
+            mem = psutil.virtual_memory()
+            stats['ram_used_gb'] = round(mem.used / (1024**3), 1)
+            stats['ram_total_gb'] = round(mem.total / (1024**3), 1)
+            stats['ram_percent'] = mem.percent
+        except ImportError:
+            pass
+        try:
+            from integrations.service_tools.vram_manager import vram_manager
+            stats['gpu'] = vram_manager.detect_gpu()
+        except Exception:
+            pass
+        return jsonify({'success': True, **stats})
+    except ImportError:
+        return jsonify({'error': 'Resource governor not available'}), 503
+
+
 @app.route('/status', methods=["GET"])
 def status():
     response = {
