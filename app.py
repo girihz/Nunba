@@ -5314,6 +5314,92 @@ def main():
 
         logger.info(f"Window created: {window_width}x{window_height}, hidden={start_hidden}")
 
+        # ── Nanba Companion: floating desktop pet ──────────────────────
+        # Second pywebview window: frameless, transparent, always-on-top.
+        # Renders 3D animated character (Three.js) that talks via TTS,
+        # listens via STT, and gamifies the conversation experience.
+        _companion_window = None
+        try:
+            import ctypes as _ct
+            _screen_w = _ct.windll.user32.GetSystemMetrics(0) if sys.platform == 'win32' else 1920
+            _screen_h = _ct.windll.user32.GetSystemMetrics(1) if sys.platform == 'win32' else 1080
+            _comp_w, _comp_h = 200, 260
+            _comp_x = _screen_w - _comp_w - 30  # Bottom-right, 30px margin
+            _comp_y = _screen_h - _comp_h - 80  # Above taskbar
+
+            class CompanionAPI:
+                """Python bridge for the companion window JS."""
+                def on_companion_click(self):
+                    """User clicked the companion — toggle main window or start voice chat."""
+                    try:
+                        if _window:
+                            _window.show()
+                            _window.restore()
+                    except Exception:
+                        pass
+
+                def on_companion_dblclick(self):
+                    """User double-clicked — bring main window to front."""
+                    try:
+                        if _window:
+                            _window.show()
+                            _window.restore()
+                            _window.on_top = True
+                            time.sleep(0.3)
+                            _window.on_top = False
+                    except Exception:
+                        pass
+
+            _companion_api = CompanionAPI()
+
+            # Companion serves from the same Flask server
+            _comp_url = f"http://localhost:{args.port}/nanba-companion.html"
+
+            _companion_window = webview.create_window(
+                title='Nanba',
+                url=_comp_url,
+                width=_comp_w,
+                height=_comp_h,
+                x=_comp_x,
+                y=_comp_y,
+                resizable=False,
+                frameless=True,
+                easy_drag=True,
+                on_top=True,
+                transparent=True,
+                background_color='#00000000',
+                js_api=_companion_api,
+            )
+            logger.info("[COMPANION] Nanba companion window created at (%d, %d)",
+                        _comp_x, _comp_y)
+
+            # Wire ResourceGovernor mode changes to companion
+            def _update_companion_mode():
+                if not _companion_window:
+                    return
+                try:
+                    from core.resource_governor import get_governor
+                    mode = get_governor().get_mode()
+                    _companion_window.evaluate_js(
+                        f"window.companionAPI && window.companionAPI.setMode('{mode}')")
+                except Exception:
+                    pass
+
+            # Wire TTS events to companion (speaking animation)
+            def _on_companion_loaded():
+                try:
+                    # Set language from user preference
+                    lang = os.environ.get('HARTOS_LANG', 'en')[:2]
+                    _companion_window.evaluate_js(
+                        f"window.companionAPI && window.companionAPI.setLanguage('{lang}')")
+                except Exception:
+                    pass
+            if _companion_window:
+                _companion_window.events.loaded += _on_companion_loaded
+
+        except Exception as _comp_err:
+            logger.debug("[COMPANION] Companion window not created: %s", _comp_err)
+
         # Apply positioning after window creation
         if position_info:
             apply_window_positioning(_window, position_info)
