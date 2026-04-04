@@ -1185,18 +1185,50 @@ def admin_models_unload(model_id):
         return jsonify({"error": str(e)}), 500
 
 
+# Track active downloads for progress reporting
+_download_progress = {}  # model_id → {status, percent, message, started_at}
+
 @app.route('/api/admin/models/<model_id>/download', methods=["POST"])
 def admin_models_download(model_id):
-    """Download a model without loading it."""
+    """Download a model in background. Poll /download/status for progress."""
     if not _is_local_request():
         return jsonify({"error": "local only"}), 403
     try:
         from models.orchestrator import get_orchestrator
+        import threading, time
         orch = get_orchestrator()
-        success = orch.download(model_id)
-        return jsonify({"success": success})
+
+        _download_progress[model_id] = {
+            'status': 'downloading', 'percent': 0,
+            'message': 'Starting download...', 'started_at': time.time(),
+        }
+
+        def _bg_download():
+            try:
+                success = orch.download(model_id)
+                _download_progress[model_id] = {
+                    'status': 'complete' if success else 'error',
+                    'percent': 100 if success else 0,
+                    'message': 'Download complete' if success else 'Download failed',
+                }
+            except Exception as e:
+                _download_progress[model_id] = {
+                    'status': 'error', 'percent': 0, 'message': str(e),
+                }
+
+        threading.Thread(target=_bg_download, daemon=True).start()
+        return jsonify({"success": True, "status": "downloading"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/admin/models/<model_id>/download/status', methods=["GET"])
+def admin_models_download_status(model_id):
+    """Poll download progress for a model."""
+    progress = _download_progress.get(model_id)
+    if not progress:
+        return jsonify({"status": "idle"})
+    return jsonify(progress)
 
 
 @app.route('/api/admin/models/auto-select', methods=["POST"])
