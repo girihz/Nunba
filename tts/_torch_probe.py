@@ -1,73 +1,159 @@
 """
-Torch CUDA Probe — subprocess check that avoids stub module poisoning.
+Torch CUDA Probe — subprocess checks that avoid stub module poisoning.
 
-Single source of truth for both main.py and tts_engine.py.
+Single source of truth for main.py and tts_engine.py.
+ALL torch/model import checks run in python-embed subprocess,
+never in the main frozen process (where the stub torch poisons sys.modules).
+
 Passes paths via sys.argv (not f-string interpolation) to avoid code injection.
 """
 
 import logging
 import os
+import subprocess
 import sys
 
 logger = logging.getLogger(__name__)
 
-# Sentinel: None = not checked yet, True/False = result
-_cached_result = None
+# ── Shared state ──────────────────────────────────────────────────────
+
+_embed_py = None   # Resolved once, cached
+_usp = None        # User site-packages path
+_tlib = None       # torch/lib DLL path
+
+
+def _resolve_paths():
+    """Resolve python-embed and user site-packages paths once."""
+    global _embed_py, _usp, _tlib
+
+    if _usp is not None:
+        return _embed_py is not None
+
+    _usp = os.path.join(os.path.expanduser('~'), '.nunba', 'site-packages')
+    _tlib = os.path.join(_usp, 'torch', 'lib')
+
+    if sys.platform != 'win32' or not getattr(sys, 'frozen', False):
+        return False
+
+    candidate = os.path.join(os.path.dirname(sys.executable), 'python-embed', 'python.exe')
+    if os.path.isfile(candidate):
+        _embed_py = candidate
+        return True
+    return False
+
+
+def _run_in_embed(code: str, extra_argv: list = None, timeout: int = 15) -> subprocess.CompletedProcess:
+    """Run Python code in python-embed subprocess with user site-packages on path.
+
+    Args:
+        code: Python code string (paths come via sys.argv, not interpolated)
+        extra_argv: Additional args passed as sys.argv[3:]
+        timeout: Subprocess timeout in seconds
+    """
+    if not _resolve_paths() or not _embed_py:
+        raise RuntimeError("python-embed not available")
+
+    cmd = [_embed_py, '-c', code, _usp, _tlib]
+    if extra_argv:
+        cmd.extend(extra_argv)
+
+    return subprocess.run(
+        cmd, capture_output=True, text=True, timeout=timeout,
+    )
+
+
+# ── CUDA check ────────────────────────────────────────────────────────
+
+_cuda_cached = None
 
 
 def check_cuda_available() -> bool:
     """Check if CUDA torch is usable via a clean subprocess.
 
-    Uses python-embed/python.exe (frozen builds) to avoid the stub torch
-    that poisons sys.modules in the main process.
-
     Returns True if CUDA torch works, False otherwise.
     Thread-safe: first caller does the subprocess, subsequent callers get cached result.
     """
-    global _cached_result
-    if _cached_result is not None:
-        return _cached_result
+    global _cuda_cached
+    if _cuda_cached is not None:
+        return _cuda_cached
 
-    # Only relevant for frozen Windows builds
-    if sys.platform != 'win32' or not getattr(sys, 'frozen', False):
-        _cached_result = False
+    if not _resolve_paths():
+        _cuda_cached = False
         return False
 
-    embed_py = os.path.join(os.path.dirname(sys.executable), 'python-embed', 'python.exe')
-    if not os.path.isfile(embed_py):
-        _cached_result = False
-        return False
-
-    usp = os.path.join(os.path.expanduser('~'), '.nunba', 'site-packages')
-    tlib = os.path.join(usp, 'torch', 'lib')
-    if not os.path.isdir(tlib):
-        _cached_result = False
+    if not os.path.isdir(_tlib):
+        _cuda_cached = False
         return False
 
     try:
-        import subprocess
-        # Paths passed via sys.argv — no f-string interpolation in code (avoids injection)
-        result = subprocess.run(
-            [embed_py, '-c',
-             'import sys,os;'
-             'sys.path.insert(0,sys.argv[1]);'
-             'os.add_dll_directory(sys.argv[2]) if hasattr(os,"add_dll_directory") else None;'
-             'import torch;print(torch.__version__,torch.cuda.is_available())',
-             usp, tlib],
-            capture_output=True, text=True, timeout=15,
+        r = _run_in_embed(
+            'import sys,os;'
+            'sys.path.insert(0,sys.argv[1]);'
+            'os.add_dll_directory(sys.argv[2]) if hasattr(os,"add_dll_directory") else None;'
+            'import torch;print(torch.__version__,torch.cuda.is_available())'
         )
-        if result.returncode == 0:
-            parts = result.stdout.strip().split()
+        if r.returncode == 0:
+            parts = r.stdout.strip().split()
             version = parts[0] if parts else '?'
             cuda = len(parts) > 1 and parts[1] == 'True'
-            _cached_result = cuda
+            _cuda_cached = cuda
             logger.info("Torch probe: %s cuda=%s (subprocess)", version, cuda)
             return cuda
         else:
-            logger.debug("Torch probe failed (exit %d): %s",
-                         result.returncode, result.stderr[:200])
+            logger.debug("Torch probe failed (exit %d): %s", r.returncode, r.stderr[:200])
     except Exception as e:
         logger.debug("Torch probe error: %s", e)
 
-    _cached_result = False
+    _cuda_cached = False
     return False
+
+
+# ── Backend runnable check ────────────────────────────────────────────
+
+_backend_cache = {}   # backend_name → bool
+
+
+def check_backend_runnable(backend: str, import_name: str) -> bool:
+    """Check if a TTS backend can actually import + run in python-embed.
+
+    This is the REAL runnable check — runs in a clean subprocess so the
+    stub torch doesn't poison the import. Much more reliable than
+    importlib.util.find_spec() which only checks if the .py file exists.
+
+    Args:
+        backend: Backend name (e.g. 'indic_parler', 'f5', 'chatterbox_turbo')
+        import_name: Python import name (e.g. 'parler_tts', 'f5_tts', 'chatterbox')
+
+    Returns True if the backend can be imported in python-embed.
+    Cached per backend.
+    """
+    if backend in _backend_cache:
+        return _backend_cache[backend]
+
+    if not _resolve_paths():
+        _backend_cache[backend] = False
+        return False
+
+    try:
+        r = _run_in_embed(
+            'import sys,os;'
+            'sys.path.insert(0,sys.argv[1]);'
+            'os.add_dll_directory(sys.argv[2]) if hasattr(os,"add_dll_directory") else None;'
+            'mod=sys.argv[3];'
+            'exec(f"import {mod}");'
+            'print("OK")',
+            extra_argv=[import_name],
+            timeout=20,
+        )
+        ok = r.returncode == 0 and 'OK' in r.stdout
+        _backend_cache[backend] = ok
+        if ok:
+            logger.info("Backend probe: %s (%s) importable (subprocess)", backend, import_name)
+        else:
+            logger.info("Backend probe: %s (%s) NOT importable: %s",
+                        backend, import_name, r.stderr[:200].strip())
+        return ok
+    except Exception as e:
+        logger.debug("Backend probe error for %s: %s", backend, e)
+        _backend_cache[backend] = False
+        return False

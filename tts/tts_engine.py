@@ -623,16 +623,23 @@ class TTSEngine:
         if not cap:
             return False
 
-        # ── Software check: is the required package installed? ──
+        # ── Software check: is the required package actually importable? ──
+        # Uses subprocess probe (python-embed) to avoid stub torch poisoning.
+        # find_spec only checks if the .py exists, not if imports succeed.
         required_pkg = self._BACKEND_REQUIRED_IMPORTS.get(backend)
         if required_pkg:
             if required_pkg not in TTSEngine._import_check_cache:
-                import importlib.util
-                TTSEngine._import_check_cache[required_pkg] = (
-                    importlib.util.find_spec(required_pkg) is not None
-                )
+                try:
+                    from tts._torch_probe import check_backend_runnable
+                    TTSEngine._import_check_cache[required_pkg] = check_backend_runnable(backend, required_pkg)
+                except Exception:
+                    # Fallback to find_spec if probe unavailable (dev mode)
+                    import importlib.util
+                    TTSEngine._import_check_cache[required_pkg] = (
+                        importlib.util.find_spec(required_pkg) is not None
+                    )
             if not TTSEngine._import_check_cache[required_pkg]:
-                logger.debug(f"Backend {backend} skipped: '{required_pkg}' package not installed")
+                logger.debug(f"Backend {backend} skipped: '{required_pkg}' not runnable")
                 return False
 
         # ── GPU backends need working CUDA in torch ──

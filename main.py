@@ -2620,10 +2620,21 @@ def start_background_services():
             from tts._torch_probe import check_cuda_available
             _cuda_ok = check_cuda_available()
 
-            from tts.tts_engine import get_tts_engine, TTSEngine
+            # Import TTSEngine class first (just the class, not get_tts_engine singleton)
+            # so we can prime its cache BEFORE it constructs the engine
+            from tts.tts_engine import TTSEngine
             if _cuda_ok:
                 TTSEngine._import_check_cache['_torch_cuda'] = True
                 logging.info("TTS: CUDA torch verified via subprocess — GPU TTS enabled")
+                # Probe each GPU backend so the compiled .pyc's _can_run_backend
+                # sees them in cache and skips the poisoned in-process import
+                from tts._torch_probe import check_backend_runnable
+                for _be, _imp in TTSEngine._BACKEND_REQUIRED_IMPORTS.items():
+                    if check_backend_runnable(_be, _imp):
+                        TTSEngine._import_check_cache[_imp] = True
+                        logging.info(f"TTS: backend {_be} ({_imp}) verified runnable")
+            # NOW create the engine — cache is primed, _can_run_backend will find entries
+            from tts.tts_engine import get_tts_engine
             engine = get_tts_engine()
 
             # Read user's preferred language from HART onboarding
