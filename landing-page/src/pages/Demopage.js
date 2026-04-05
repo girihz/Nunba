@@ -2144,14 +2144,14 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
               if (data.is_final) {
                 fullText += (fullText ? ' ' : '') + data.text.trim();
                 setInputMessage(fullText);
-                // Auto-send after 1.5s of silence
+                // Auto-send after 1s of silence (fast conversational flow)
                 clearTimeout(autoSendTimer);
                 autoSendTimer = setTimeout(() => {
                   if (fullText.trim() && handleSendRef.current) {
                     handleSendRef.current();
                     fullText = '';
                   }
-                }, 1500);
+                }, 1000);
               } else {
                 // Interim — show current full + interim
                 setInputMessage(fullText + (fullText ? ' ' : '') + data.text.trim());
@@ -2252,7 +2252,7 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
               handleSendRef.current();
               committedText = '';
             }
-          }, 1500);
+          }, 1000);
         }
       };
 
