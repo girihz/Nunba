@@ -301,7 +301,10 @@ export function useTTS(options = {}) {
       const trimmed = text.trim();
 
       // Lazy-init browser TTS on first speak (satisfies AudioContext autoplay policy)
-      if (!pocketTTSRef.current) initBrowserTTS();
+      // MUST await — otherwise serverAvailableRef is still false when we check it
+      if (!pocketTTSRef.current && !serverAvailableRef.current) {
+        await initBrowserTTS();
+      }
 
       setIsLoading(true);
       setError(null);
