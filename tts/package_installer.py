@@ -495,6 +495,9 @@ def install_backend_full(backend: str,
         if not pkg_ok:
             return False, pkg_msg
 
+        # Post-install patches for known compatibility issues
+        _apply_post_install_patches(backend)
+
         # Step 2: Model weights (via huggingface_hub)
         if progress_cb:
             progress_cb(f"Step 2/2: Downloading model weights for {display_name}...")
@@ -530,6 +533,31 @@ def _is_hf_model_cached(model_id: str) -> bool:
             if simple_name in entry.name.lower():
                 return True
     return False
+
+
+def _apply_post_install_patches(backend: str):
+    """Apply source patches for known package compatibility issues."""
+    if backend == 'indic_parler':
+        # parler_tts dac_wrapper calls model.decode(audio_values) but HF's
+        # DACModel.decode() expects keyword arg 'quantized_representation'.
+        user_sp = get_user_site_packages()
+        target = os.path.join(user_sp, 'parler_tts', 'dac_wrapper', 'modeling_dac.py')
+        if os.path.isfile(target):
+            try:
+                with open(target, 'r') as f:
+                    src = f.read()
+                old = 'audio_values = self.model.decode(audio_values)'
+                new = ('try:\n'
+                       '            audio_values = self.model.decode(audio_values)\n'
+                       '        except TypeError:\n'
+                       '            audio_values = self.model.decode(quantized_representation=audio_values)')
+                if old in src and 'except TypeError' not in src:
+                    src = src.replace(old, new)
+                    with open(target, 'w') as f:
+                        f.write(src)
+                    logger.info("Patched parler_tts DACModel.decode() for HF compatibility")
+            except Exception as e:
+                logger.debug(f"DAC decode patch skipped: {e}")
 
 
 def _download_model_weights(backend: str,
