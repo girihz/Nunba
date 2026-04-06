@@ -1397,9 +1397,9 @@ class _LazyIndicParler:
         if torch.cuda.is_available():
             try:
                 _free = torch.cuda.mem_get_info()[0] / (1024**3)
-                _use_gpu = _free >= 4.0  # Need ~4GB for model + inference
+                _use_gpu = _free >= 2.0  # Model ~1.2GB + inference buffers
                 if not _use_gpu:
-                    logger.info(f"Indic Parler: {_free:.1f}GB VRAM free < 4GB — using CPU")
+                    logger.info(f"Indic Parler: {_free:.1f}GB VRAM free < 2GB — using CPU")
             except Exception:
                 pass
         self._device = 'cuda:0' if _use_gpu else 'cpu'
