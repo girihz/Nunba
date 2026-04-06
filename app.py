@@ -5944,11 +5944,22 @@ window.addEventListener('unhandledrejection', function(e) {
                 try:
                     _cur = _window.get_current_url() or ''
                     if not _cur or 'about:blank' in _cur or _cur == initial_url:
-                        # Page didn't load or is blank — force navigate
                         logger.info(f"[SHOWN] Forcing navigation to {initial_url}")
                         _window.load_url(initial_url)
                 except Exception as _e:
                     logger.debug(f"[SHOWN] Navigation check failed: {_e}")
+                # Bring window to front on first show (not always-on-top)
+                if sys.platform == 'win32':
+                    try:
+                        from ctypes import windll
+                        hwnd = (getattr(getattr(_window, 'original_window', None), 'handle', 0)
+                                or getattr(_window, 'handle', 0)
+                                or windll.user32.FindWindowW(None, args.title))
+                        if hwnd:
+                            windll.user32.SetForegroundWindow(hwnd)
+                            logger.info("[SHOWN] Window brought to foreground")
+                    except Exception as _fe:
+                        logger.debug(f"[SHOWN] SetForegroundWindow failed: {_fe}")
             _window.events.shown += _on_shown_navigate
 
             # Background mode: WebView2 doesn't navigate when hidden=True.
