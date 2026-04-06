@@ -172,15 +172,96 @@ if getattr(sys, 'frozen', False):
         _frozen_log_dir = os.path.join(os.path.expanduser('~'), 'Documents', 'Nunba', 'logs')
     os.makedirs(_frozen_log_dir, exist_ok=True)
     try:
-        _frozen_log = open(os.path.join(_frozen_log_dir, 'frozen_debug.log'), 'w', encoding='utf-8')
+        _frozen_log = open(os.path.join(_frozen_log_dir, 'frozen_debug.log'), 'w',
+                           encoding='utf-8', buffering=1)  # line-buffered: every \n hits disk
         _atexit.register(_frozen_log.close)
         sys.stdout = _frozen_log
         sys.stderr = _frozen_log
     except OSError:
         pass  # If log dir is read-only, skip — don't crash on startup
 
+    # ── Startup tracer: log every phase until agent page is visible ──
+    # Writes to a SEPARATE file (startup_trace.log) with immediate flush.
+    # This survives crashes that kill frozen_debug.log.
+    import time as _time
+    _startup_t0 = _time.time()
+    try:
+        _trace_log = open(os.path.join(_frozen_log_dir, 'startup_trace.log'), 'w',
+                          encoding='utf-8', buffering=1)
+    except OSError:
+        import io as _tio
+        _trace_log = _tio.StringIO()
+
+    def _trace(msg):
+        try:
+            elapsed = _time.time() - _startup_t0
+            _trace_log.write(f"[{elapsed:8.3f}s] {msg}\n")
+            _trace_log.flush()
+        except Exception:
+            pass
+
+    _trace("=== Nunba startup trace ===")
+    _trace(f"argv: {sys.argv}")
+    _trace(f"frozen: {getattr(sys, 'frozen', False)}")
+    _trace(f"executable: {sys.executable}")
+    try:
+        _disk_info = os.popen('wmic logicaldisk where DeviceID="C:" get FreeSpace /value').read().strip()
+        _trace(f"disk free: {_disk_info}")
+    except Exception:
+        pass
+
+    # Make _trace available globally for other modules
+    import builtins as _builtins
+    _builtins._nunba_trace = _trace
+
+    # ── AOP: trace EVERY function call/return until agent is visible ──
+    # Uses sys.settrace — logs to startup_trace.log with immediate flush.
+    # Auto-disables after 60s or when _nunba_trace_stop() is called.
+    _trace_active = [True]
+    _trace_deadline = _startup_t0 + 60  # auto-stop after 60s
+
+    def _call_tracer(frame, event, arg):
+        if not _trace_active[0]:
+            return None
+        if _time.time() > _trace_deadline:
+            _trace_active[0] = False
+            _trace("=== AOP trace auto-stopped (60s) ===")
+            return None
+        try:
+            if event == 'call':
+                fn = frame.f_code.co_name
+                mod = frame.f_globals.get('__name__', '?')
+                # Skip noisy internal modules
+                if mod and (mod.startswith('importlib') or mod.startswith('_') or
+                           mod.startswith('zipimport') or mod.startswith('encodings')):
+                    return None
+                line = frame.f_lineno
+                _trace(f"CALL {mod}:{fn}:{line}")
+                return _call_tracer
+            elif event == 'exception':
+                fn = frame.f_code.co_name
+                mod = frame.f_globals.get('__name__', '?')
+                exc_type = arg[0].__name__ if arg and arg[0] else '?'
+                _trace(f"EXCEPTION {mod}:{fn} → {exc_type}: {arg[1] if arg and len(arg)>1 else ''}")
+        except Exception:
+            pass
+        return None
+
+    sys.settrace(_call_tracer)
+    _trace("AOP call tracer ACTIVE (60s or until stopped)")
+
+    def _nunba_trace_stop():
+        _trace_active[0] = False
+        sys.settrace(None)
+        _trace("=== AOP trace stopped manually ===")
+
+    _builtins._nunba_trace_stop = _nunba_trace_stop
+
 import os
 import sys
+
+_t = getattr(__import__('builtins'), '_nunba_trace', lambda m: None)
+_t("PATH isolation starting")
 
 # === Frozen executable PATH isolation ===
 # cx_Freeze bundles its own Python DLLs. If the user has conda, miniconda,
