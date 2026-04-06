@@ -40,7 +40,9 @@ BACKEND_PACKAGES = {
         'torchaudio',
         'sentencepiece',
         'descript-audio-codec',
-        'parler-tts==0.2.2',  # 0.2.3 has DacModel.decode() API mismatch with dac 1.0
+        'descript-audiotools',  # transitive of dac, but pip --target skips it when system has it
+        'tensorboard',          # transitive of audiotools, same issue
+        'parler-tts==0.2.2',    # 0.2.3 has DacModel.decode() API mismatch with dac 1.0
     ],
     'cosyvoice3': [
         'torchaudio',
@@ -60,6 +62,9 @@ _PIP_TO_IMPORT = {
     'parler-tts': 'parler_tts',
     'f5-tts': 'f5_tts',
     'torchaudio': 'torchaudio',
+    'descript-audio-codec': 'dac',
+    'descript-audiotools': 'audiotools',
+    'tensorboard': 'tensorboard',
 }
 
 # Human-readable names for progress messages
@@ -244,7 +249,6 @@ def _run_pip(args: list[str], progress_cb: Callable | None = None,
         args = args[:1] + [
             '--target', user_sp,
             '--no-build-isolation',  # Use system setuptools (pip's isolated build fails in frozen builds)
-            '--ignore-installed',    # Don't skip deps found in system Python — they're not in --target
         ] + args[1:]
 
     cmd = [python_exe, '-m', 'pip'] + args
