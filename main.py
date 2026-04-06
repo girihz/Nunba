@@ -14,6 +14,15 @@ import tempfile
 import threading
 import traceback
 
+# HuggingFace: skip model update checks when running offline / cached.
+# Prevents 30-60s of HEAD request timeouts on every model load.
+# Models are downloaded during install — no need to re-check at runtime.
+if not os.environ.get('HF_HUB_OFFLINE'):
+    _hf_cache = os.path.join(os.path.expanduser('~'), '.cache', 'huggingface', 'hub')
+    if os.path.isdir(_hf_cache) and any(
+            d.startswith('models--') for d in os.listdir(_hf_cache)):
+        os.environ['HF_HUB_OFFLINE'] = '1'
+
 from flask import Flask, jsonify, request, send_file
 
 try:
