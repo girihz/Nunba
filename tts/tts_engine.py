@@ -1334,22 +1334,36 @@ class TTSEngine:
                              getattr(self, '_pending_backend', None))
                 return None
 
-        # Ensure enough VRAM for inference — evict idle models if needed.
-        # Without this, loaded TTS model + LLM + Whisper can exhaust VRAM,
-        # causing "paging file too small" (OS error 1455) on synthesis.
-        try:
-            from integrations.service_tools.model_lifecycle import get_model_lifecycle_manager
-            lcm = get_model_lifecycle_manager()
-            cap = _get_engine_capabilities().get(self._active_backend, {})
-            needed = max(cap.get('vram_gb', 1.0) * 0.3, 0.5)  # 30% of model size for buffers
-            lcm.ensure_inference_headroom(needed, requester=self._active_backend)
-        except Exception:
-            pass  # Lifecycle manager not available — proceed anyway
+        # VRAM safety: check actual free VRAM before GPU synthesis.
+        # CUDA OOM can kill the ENTIRE process (C-level abort, uncatchable by Python).
+        # If truly insufficient, clear cache first, then try, then fall back.
+        cap = _get_engine_capabilities().get(self._active_backend, {})
+        vram_needed = cap.get('vram_gb', 0)
+        if vram_needed > 0:
+            try:
+                from integrations.service_tools.vram_manager import vram_manager
+                free_gb = vram_manager.get_free_vram()
+                if free_gb < 0.3:  # Less than 300MB — clear cache first
+                    try:
+                        import torch
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                            free_gb = vram_manager.get_free_vram()
+                            logger.info(f"CUDA cache cleared, now {free_gb:.1f}GB free")
+                    except Exception:
+                        pass
+                if free_gb < 0.3:  # Still too low after cache clear — CPU fallback
+                    logger.warning(
+                        f"VRAM critically low ({free_gb:.1f}GB) for {self._active_backend}. "
+                        f"Falling back to CPU engine to prevent OOM crash.")
+                    return self._synthesize_with_fallback(
+                        text, output_path, voice, self._language, **kwargs)
+            except Exception:
+                pass
 
         try:
             result = inst.synthesize(text=text, output_path=output_path,
                                      language=self._language, **kwargs)
-            # Inline sanity check: audio duration vs text length
             if result and os.path.isfile(result):
                 try:
                     fsize = os.path.getsize(result)
@@ -1361,7 +1375,13 @@ class TTSEngine:
             return result
         except Exception as e:
             logger.error(f"Synthesis failed ({self._active_backend}): {e}")
-            # Fallback chain: try next engines in preference order
+            # Clear CUDA cache after failure to prevent cascading OOM
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
             return self._synthesize_with_fallback(
                 text, output_path, voice, self._language, **kwargs)
         finally:
