@@ -325,7 +325,7 @@ if getattr(sys, 'frozen', False):
 # These take 30+ seconds. SKIPPED here, run AFTER splash is visible.
 # See _FROZEN_FIXES_DONE flag check below.
 _FROZEN_FIXES_DONE = False
-if False:  # Deferred — _run_frozen_import_fixes() runs AFTER splash at line 749
+if getattr(sys, 'frozen', False):
     # Suppress ALL warnings before importing langchain/autogen — they try to write
     # to stderr which may be closed in GUI exe even after our devnull redirect.
     # flaml (via autogen) emits UserWarning, langchain emits DeprecationWarning.
@@ -745,8 +745,9 @@ if getattr(sys, 'frozen', False) and '--validate' not in sys.argv and '--install
     except Exception:
         _early_splash = None
 
-# ── NOW run the heavy frozen fixes (splash is visible) ──
-_run_frozen_import_fixes()
+# Frozen fixes already ran at line 328 (before splash).
+# _run_frozen_import_fixes() deferred approach was reverted — it caused
+# double imports and tkinter threading crashes.
 
 import argparse
 import atexit
