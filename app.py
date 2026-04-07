@@ -2778,6 +2778,34 @@ def _gui_chat_loading():
 def _gui_prompts_loading():
     return jsonify([])
 
+def _ensure_page_rendered(window, port=5000):
+    """Check if WebView2 rendered the page. If black/blank, force reload.
+
+    WebView2 hidden mode loads URL but never renders. After hours hidden,
+    the DOM is empty. This detects that and reloads on show.
+    Called after any window.show() to fix the black screen.
+    """
+    if not window:
+        return
+    try:
+        _cur = window.get_current_url() or ''
+        _need_reload = not _cur or 'about:blank' in _cur or 'error' in _cur.lower()
+        if not _need_reload:
+            try:
+                _has_content = window.evaluate_js(
+                    "document.getElementById('root')?.children.length > 0"
+                )
+                if not _has_content:
+                    _need_reload = True
+            except Exception:
+                _need_reload = True
+        if _need_reload:
+            logging.getLogger(__name__).info("[SHOW] Black screen detected — reloading page")
+            window.load_url(f"http://localhost:{port}/local")
+    except Exception:
+        pass
+
+
 @gui_app.route('/api/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE'])
 def _gui_api_loading(path):
     return jsonify({'loading': True, 'message': 'Nunba is waking up...'}), 503
@@ -3882,13 +3910,7 @@ def start_flask():
             global _window
             if _window:
                 _window.show()
-                # Reload if the page never loaded (background auto-start)
-                try:
-                    _cur = _window.get_current_url() or ''
-                    if not _cur or 'about:blank' in _cur or 'error' in _cur.lower():
-                        _window.load_url(f"http://localhost:{args.port}/local")
-                except Exception:
-                    pass
+                _ensure_page_rendered(_window, args.port)
             return jsonify({"success": True})
 
         @_serving_app.route('/indicator/show', methods=['GET', 'OPTIONS'])
