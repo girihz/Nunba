@@ -85,7 +85,7 @@ class TestFallbackEngineCapabilities:
         assert set(_FALLBACK_ENGINE_CAPABILITIES.keys()) == expected
 
     def test_f5_vram(self):
-        assert _FALLBACK_ENGINE_CAPABILITIES[BACKEND_F5]['vram_gb'] == 2.0
+        assert _FALLBACK_ENGINE_CAPABILITIES[BACKEND_F5]['vram_gb'] == 2.5
 
     def test_chatterbox_turbo_vram(self):
         assert _FALLBACK_ENGINE_CAPABILITIES[BACKEND_CHATTERBOX_TURBO]['vram_gb'] == 5.6

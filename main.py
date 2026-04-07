@@ -14,9 +14,7 @@ import tempfile
 import threading
 import traceback
 
-# PyTorch CUDA: use expandable segments to prevent fragmentation OOM.
-# Without this, 24MB allocations fail even with 5GB free due to fragmentation.
-os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
+# PYTORCH_CUDA_ALLOC_CONF is set in app.py (must be before first torch import).
 
 # HuggingFace: skip model update checks when running offline / cached.
 # Prevents 30-60s of HEAD request timeouts on every model load.
@@ -467,6 +465,27 @@ def log_request():
     if path.startswith('/static/') or path.endswith(('.png', '.gif', '.svg', '.jpg', '.jpeg')):
         logging.debug(f"Static request: {request.method} {path}")
 
+# ── CORS origin check (single source of truth) ─────────────────────────
+_ALLOWED_ORIGINS = {
+    'https://hevolve.ai',
+    'https://www.hevolve.ai',
+    'https://hertzai.com',
+    'https://www.hertzai.com',
+    'https://hevolve.hertzai.com',
+    'https://www.hevolve.hertzai.com',
+}
+
+
+def _is_allowed_origin(origin):
+    if origin in _ALLOWED_ORIGINS:
+        return True
+    if origin.startswith('http://localhost:') or origin == 'http://localhost':
+        return True
+    if origin.startswith('http://127.0.0.1:') or origin == 'http://127.0.0.1':
+        return True
+    return False
+
+
 # Additional CORS headers for all routes
 @app.after_request
 def after_request(response):
@@ -475,28 +494,7 @@ def after_request(response):
     if path.startswith('/static/') or path.endswith(('.png', '.gif', '.svg', '.jpg', '.jpeg')):
         logging.debug(f"Static response: {path} -> {response.status_code}")
 
-    # Get the origin from the request
     origin = request.headers.get('Origin')
-
-    # List of allowed origins
-    allowed_origins = [
-        'https://hevolve.ai',
-        'https://www.hevolve.ai',
-        'https://hertzai.com',
-        'https://www.hertzai.com',
-        'https://hevolve.hertzai.com',
-        'https://www.hevolve.hertzai.com'
-    ]
-
-    # Check if origin is in allowed list or is a local dev origin
-    def _is_allowed_origin(origin):
-        if origin in allowed_origins:
-            return True
-        if origin.startswith('http://localhost:') or origin == 'http://localhost':
-            return True
-        if origin.startswith('http://127.0.0.1:') or origin == 'http://127.0.0.1':
-            return True
-        return False
 
     if origin and _is_allowed_origin(origin):
         response.headers['Access-Control-Allow-Origin'] = origin
@@ -521,23 +519,6 @@ def handle_preflight():
     if request.method == "OPTIONS":
         response = jsonify({"status": "ok"})
         origin = request.headers.get('Origin')
-
-        # Allow requests from hevolve domains and localhost
-        allowed_origins = [
-            'https://hevolve.ai',
-            'https://www.hevolve.ai',
-            'https://hevolve.hertzai.com',
-            'https://www.hevolve.hertzai.com'
-        ]
-
-        def _is_allowed_origin(origin):
-            if origin in allowed_origins:
-                return True
-            if origin.startswith('http://localhost:') or origin == 'http://localhost':
-                return True
-            if origin.startswith('http://127.0.0.1:') or origin == 'http://127.0.0.1':
-                return True
-            return False
 
         if origin and _is_allowed_origin(origin):
             response.headers['Access-Control-Allow-Origin'] = origin
@@ -2025,6 +2006,15 @@ if HARTOS_BACKEND_DIRECT:
     except Exception:
         pass
 
+    # ── Register ALL HARTOS hive blueprints (marketplace, benchmarks, robotics, etc.) ──
+    try:
+        from integrations.blueprint_registry import register_all_blueprints
+        result = register_all_blueprints(app)
+        logging.info(f"HARTOS blueprints: {len(result['registered'])} registered, "
+                     f"{len(result['skipped'])} skipped: {result['registered']}")
+    except Exception as e:
+        logging.warning(f"HARTOS blueprint registry failed: {e}")
+
 
 def _deferred_social_init():
     """Heavy social init in background — DB, migrations, channels, agents."""
@@ -2775,25 +2765,17 @@ def start_background_services():
             logging.info(f"TTS warm-up: user prefers '{preferred_lang}', selecting GPU engine...")
             engine.set_language(preferred_lang)
 
-            # Wait for background engine switch to complete (up to 60s)
-            # set_language() starts a background thread — we need to wait
-            # for it to finish so the GPU model is actually in VRAM
-            for _wait in range(120):
+            # set_language() creates the backend instance (lazy wrapper).
+            # The actual GPU model loads on the first real synthesize() call —
+            # no test synthesis needed. Forcing one here risks:
+            #   1. Concurrent GPU inference with chat thread (no lock → crash)
+            #   2. Loading F5 on GPU before llama-server → VRAM contention
+            #   3. CUDA OOM that corrupts state for all subsequent calls
+            # Wait briefly for backend switch to settle, then report readiness.
+            for _wait in range(20):
                 if not getattr(engine, '_pending_backend', None):
                     break
                 time.sleep(0.5)
-                if _wait == 0:
-                    logging.info(f"TTS warm-up: waiting for {engine._pending_backend} to load...")
-
-            # Force model load by synthesizing a test sentence
-            import tempfile as _tf
-            _test_path = os.path.join(_tf.gettempdir(), '_nunba_tts_warmup.wav')
-            try:
-                engine.synthesize("test", output_path=_test_path, language=preferred_lang)
-                if os.path.exists(_test_path):
-                    os.unlink(_test_path)
-            except Exception as _se:
-                logging.debug(f"TTS warm-up synthesis skipped: {_se}")
 
             backend = engine.get_info().get('active_backend', 'unknown')
             logging.info(f"TTS engine warmed up: {backend} (language={preferred_lang})")

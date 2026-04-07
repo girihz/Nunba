@@ -54,7 +54,7 @@ BACKEND_NONE = "none"
 _FALLBACK_ENGINE_CAPABILITIES = {
     BACKEND_F5: {
         'name': 'F5-TTS (Flow Matching)',
-        'vram_gb': 3.0,  # model 2GB + vocos 200MB + CUDA context + inference buffers
+        'vram_gb': 2.5,  # model 1.2GB + vocos 200MB + CUDA context + inference buffers
         'languages': {'en', 'zh'},
         'paralinguistic': [],
         'emotion_tags': [],
@@ -301,6 +301,100 @@ LANG_ENGINE_PREFERENCE = _FALLBACK_LANG_ENGINE_PREFERENCE
 
 
 # ════════════════════════════════════════════════════════════════════
+# DEVICE SELECTION — VRAMManager is the single source of truth
+# ════════════════════════════════════════════════════════════════════
+
+# Default timeout for a single GPU inference call (seconds).
+# Prevents indefinite hangs from corrupted CUDA state or model bugs.
+_INFERENCE_TIMEOUT_S = 120
+
+
+def _run_with_timeout(fn, timeout_s=_INFERENCE_TIMEOUT_S):
+    """Run fn() with a hard timeout. Raises TimeoutError if exceeded."""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutTimeout
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix='tts-infer') as ex:
+        future = ex.submit(fn)
+        try:
+            return future.result(timeout=timeout_s)
+        except FutTimeout:
+            logger.error(f"GPU inference timed out after {timeout_s}s")
+            raise TimeoutError(f"TTS inference exceeded {timeout_s}s")
+
+
+# Minimum free VRAM (GB) required before starting GPU inference.
+# Below this, CUDA allocations risk triggering a C-level abort that
+# kills the ENTIRE process — uncatchable by Python try/except.
+_MIN_INFERENCE_HEADROOM_GB = 0.3
+
+
+def _oom_guard(fn, device=None):
+    """Run GPU inference with OOM blast-radius containment.
+
+    Pre-flight: checks VRAM headroom. If too low, raises RuntimeError
+    BEFORE touching CUDA — preventing the C-level abort.
+
+    Post-flight: catches CUDA OOM (RuntimeError) and cleans up CUDA state
+    so the app stays alive and can fall back to CPU.
+    """
+    # Pre-flight: reject if VRAM too tight (prevents uncatchable C abort)
+    if device == 'cuda':
+        try:
+            from integrations.service_tools.vram_manager import vram_manager
+            free = vram_manager.get_free_vram()
+            if free < _MIN_INFERENCE_HEADROOM_GB:
+                raise RuntimeError(
+                    f"OOM guard: {free:.2f}GB free < {_MIN_INFERENCE_HEADROOM_GB}GB headroom. "
+                    f"Skipping GPU inference to prevent process crash.")
+        except ImportError:
+            pass
+        except RuntimeError:
+            raise  # re-raise the guard error
+        except Exception:
+            pass
+
+    # Run inference — catch CUDA OOM (RuntimeError) before it cascades
+    try:
+        return fn()
+    except RuntimeError as e:
+        err_str = str(e).lower()
+        if 'out of memory' in err_str or 'cuda' in err_str:
+            logger.error(f"OOM guard caught CUDA error: {e}")
+            _clear_cuda_cache()
+            raise  # let TTSEngine._synthesize_with_fallback handle it
+        raise
+
+
+def _clear_cuda_cache():
+    """Release cached CUDA memory. Safe no-op if torch/CUDA unavailable."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def _suggest_device(tool_name: str) -> str:
+    """Ask VRAMManager which device a TTS model should load on.
+
+    Returns 'cuda' or 'cpu'. VRAMManager.suggest_offload_mode() considers
+    free VRAM, model size from VRAM_BUDGETS, and existing allocations.
+    """
+    try:
+        from integrations.service_tools.vram_manager import vram_manager
+        mode = vram_manager.suggest_offload_mode(tool_name)
+        # 'gpu' → cuda, 'cpu_offload' → cuda (model handles mixed),
+        # 'cpu_only' → cpu
+        device = 'cpu' if mode == 'cpu_only' else 'cuda'
+        if device == 'cpu':
+            free = vram_manager.get_free_vram()
+            logger.info(f"{tool_name}: {free:.1f}GB VRAM free — using CPU")
+        return device
+    except Exception:
+        return 'cpu'
+
+
+# ════════════════════════════════════════════════════════════════════
 # PRE-SYNTH CACHE — instant playback for predicted responses
 # ════════════════════════════════════════════════════════════════════
 
@@ -526,6 +620,7 @@ class TTSEngine:
         self._active_backend = BACKEND_NONE
         self._initialized = False
         self._init_lock = threading.Lock()
+        self._synth_lock = threading.Lock()  # GPU backends are not thread-safe
         self._pending_backend = None  # backend being loaded in background
 
         # Hardware info (detected lazily)
@@ -685,6 +780,7 @@ class TTSEngine:
     _auto_install_pending = set()
     # Cache backends that failed to install — don't retry every request
     _auto_install_failed = set()
+    _auto_install_lock = threading.Lock()
 
     def _try_auto_install_backend(self, backend):
         """Trigger a background install of the given backend's packages + models.
@@ -702,27 +798,27 @@ class TTSEngine:
                 logger.debug(f"Skipping auto-install of '{backend}': no GPU detected")
                 return False
 
-        # Already failed? Don't retry every request
-        if backend in TTSEngine._auto_install_failed:
-            logger.debug(f"Auto-install for '{backend}' previously failed, skipping")
-            return False
+        with TTSEngine._auto_install_lock:
+            # Already failed? Don't retry every request
+            if backend in TTSEngine._auto_install_failed:
+                logger.debug(f"Auto-install for '{backend}' previously failed, skipping")
+                return False
 
-        # Already running?
-        if backend in TTSEngine._auto_install_pending:
-            logger.debug(f"Auto-install for '{backend}' already in progress, skipping")
-            return False
+            # Already running?
+            if backend in TTSEngine._auto_install_pending:
+                logger.debug(f"Auto-install for '{backend}' already in progress, skipping")
+                return False
 
-        # Quick check — maybe packages landed since last cache refresh
-        required_pkg = self._BACKEND_REQUIRED_IMPORTS.get(backend)
-        if required_pkg:
-            import importlib.util
-            if importlib.util.find_spec(required_pkg) is not None:
-                # Packages exist — clear stale cache entry so _can_run_backend sees it
-                TTSEngine._import_check_cache.pop(required_pkg, None)
-                logger.info(f"Packages for '{backend}' already importable after cache refresh")
-                return True
+            # Quick check — maybe packages landed since last cache refresh
+            required_pkg = self._BACKEND_REQUIRED_IMPORTS.get(backend)
+            if required_pkg:
+                import importlib.util
+                if importlib.util.find_spec(required_pkg) is not None:
+                    TTSEngine._import_check_cache.pop(required_pkg, None)
+                    logger.info(f"Packages for '{backend}' already importable after cache refresh")
+                    return True
 
-        TTSEngine._auto_install_pending.add(backend)
+            TTSEngine._auto_install_pending.add(backend)
 
         def _bg_install():
             try:
@@ -739,16 +835,20 @@ class TTSEngine:
                                 f"will be used on next TTS request")
                 else:
                     logger.warning(f"[auto-install] '{backend}' install failed: {result}")
-                    TTSEngine._auto_install_failed.add(backend)
+                    with TTSEngine._auto_install_lock:
+                        TTSEngine._auto_install_failed.add(backend)
             except ImportError:
                 logger.warning(f"[auto-install] package_installer not available, "
                                f"cannot auto-install '{backend}'")
-                TTSEngine._auto_install_failed.add(backend)
+                with TTSEngine._auto_install_lock:
+                    TTSEngine._auto_install_failed.add(backend)
             except Exception as e:
                 logger.error(f"[auto-install] '{backend}' install error: {e}")
-                TTSEngine._auto_install_failed.add(backend)
+                with TTSEngine._auto_install_lock:
+                    TTSEngine._auto_install_failed.add(backend)
             finally:
-                TTSEngine._auto_install_pending.discard(backend)
+                with TTSEngine._auto_install_lock:
+                    TTSEngine._auto_install_pending.discard(backend)
 
         t = threading.Thread(target=_bg_install, daemon=True,
                              name=f"tts-auto-install-{backend}")
@@ -861,12 +961,7 @@ class TTSEngine:
                     old_inst.unload_model()
                 del old_inst
                 gc.collect()
-                try:
-                    import torch
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                except Exception:
-                    pass
+                _clear_cuda_cache()
                 # Release VRAM allocation via VRAMManager
                 if hasattr(self, '_vram_manager') and self._vram_manager:
                     tool_name = self._VRAM_TOOL_MAP.get(old)
@@ -1334,72 +1429,53 @@ class TTSEngine:
                              getattr(self, '_pending_backend', None))
                 return None
 
-        # VRAM safety: check actual free VRAM before GPU synthesis.
-        # CUDA OOM can kill the ENTIRE process (C-level abort, uncatchable by Python).
-        # Must check model_size + inference_buffer, not just a flat threshold.
-        cap = _get_engine_capabilities().get(self._active_backend, {})
-        vram_needed = cap.get('vram_gb', 0)
-        if vram_needed > 0:
+        # VRAM safety: delegate to VRAMManager (single source of truth).
+        # CUDA OOM can kill the ENTIRE process (C-level abort, uncatchable).
+        tool_name = self._VRAM_TOOL_MAP.get(self._active_backend)
+        if tool_name:
             try:
                 from integrations.service_tools.vram_manager import vram_manager
-                free_gb = vram_manager.get_free_vram()
-                # Need model size + 0.5GB inference buffer. If not enough, CPU fallback.
-                _min_required = vram_needed + 0.5
-                if free_gb < _min_required:
+                mode = vram_manager.suggest_offload_mode(tool_name)
+                if mode == 'cpu_only' and getattr(inst, '_device', None) == 'cuda':
                     logger.warning(
-                        f"VRAM insufficient for {self._active_backend}: "
-                        f"{free_gb:.1f}GB free < {_min_required:.1f}GB needed "
-                        f"(model={vram_needed}GB + 0.5GB buffer). Using CPU fallback.")
-                    return self._synthesize_with_fallback(
-                        text, output_path, voice, self._language, **kwargs)
-                if free_gb < 0.3:  # Less than 300MB — clear cache first
-                    try:
-                        import torch
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                            free_gb = vram_manager.get_free_vram()
-                            logger.info(f"CUDA cache cleared, now {free_gb:.1f}GB free")
-                    except Exception:
-                        pass
-                if free_gb < 0.3:  # Still too low after cache clear — CPU fallback
-                    logger.warning(
-                        f"VRAM critically low ({free_gb:.1f}GB) for {self._active_backend}. "
-                        f"Falling back to CPU engine to prevent OOM crash.")
+                        f"VRAM insufficient for {self._active_backend} "
+                        f"(loaded on cuda, vram_manager says cpu_only). CPU fallback.")
                     return self._synthesize_with_fallback(
                         text, output_path, voice, self._language, **kwargs)
             except Exception:
                 pass
 
-        try:
-            result = inst.synthesize(text=text, output_path=output_path,
-                                     language=self._language, **kwargs)
-            if result and os.path.isfile(result):
-                try:
-                    fsize = os.path.getsize(result)
-                    text_len = len(text.strip())
-                    if text_len >= 10 and fsize < 16000:
-                        logger.warning(f"TTS output suspiciously small ({fsize}B for {text_len} chars), may be broken")
-                except Exception:
-                    pass
-            return result
-        except Exception as e:
-            logger.error(f"Synthesis failed ({self._active_backend}): {e}")
-            # Clear CUDA cache after failure to prevent cascading OOM
+        # Serialize GPU inference — PyTorch models are NOT thread-safe.
+        # Without this, concurrent calls (e.g. warm-up + chat) cause tensor
+        # corruption, CUDA state errors, or segfaults.
+        with self._synth_lock:
             try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except Exception:
-                pass
-            return self._synthesize_with_fallback(
-                text, output_path, voice, self._language, **kwargs)
-        finally:
-            # Restore evicted models (e.g., Whisper back to GPU for STT).
-            try:
-                from integrations.service_tools.model_lifecycle import get_model_lifecycle_manager
-                get_model_lifecycle_manager()._process_swap_queue()
-            except Exception:
-                pass
+                result = inst.synthesize(text=text, output_path=output_path,
+                                         language=self._language, **kwargs)
+                if result and os.path.isfile(result):
+                    try:
+                        fsize = os.path.getsize(result)
+                        text_len = len(text.strip())
+                        if text_len >= 10 and fsize < 16000:
+                            logger.warning(f"TTS output suspiciously small ({fsize}B for {text_len} chars), may be broken")
+                    except Exception:
+                        pass
+                return result
+            except Exception as e:
+                logger.error(f"Synthesis failed ({self._active_backend}): {e}")
+                # Unload the failed GPU backend — its CUDA state may be corrupted.
+                # Leaving it loaded risks segfaults on subsequent CUDA calls.
+                failed_backend = self._active_backend
+                failed_inst = self._backends.pop(failed_backend, None)
+                if failed_inst and hasattr(failed_inst, 'unload_model'):
+                    try:
+                        failed_inst.unload_model()
+                    except Exception:
+                        pass
+                del failed_inst
+                _clear_cuda_cache()
+                return self._synthesize_with_fallback(
+                    text, output_path, voice, self._language, **kwargs)
 
     def _synthesize_with_fallback(self, text, output_path, voice, language, **kwargs):
         """Try remaining engines in the preference chain after the primary fails.
@@ -1508,17 +1584,21 @@ class TTSEngine:
 # ════════════════════════════════════════════════════════════════════
 
 class _LazyF5:
-    """Lazy wrapper for F5-TTS. 2GB VRAM, best voice cloning quality."""
+    """Lazy wrapper for F5-TTS. ~2.5GB VRAM, best voice cloning quality."""
 
     def __init__(self):
         self._model = None
+        self._device = None
         self._ref_voice = os.path.join(os.path.expanduser('~'), 'Downloads', 'Lily.mp3')
         self._ref_text = ''  # Empty = auto-transcribe on first call, then cached by F5
 
     def _ensure_loaded(self):
         if self._model is None:
+            device = _suggest_device('tts_f5')
             from f5_tts.api import F5TTS
-            self._model = F5TTS(model='F5TTS_v1_Base', device='cuda')
+            self._model = F5TTS(model='F5TTS_v1_Base', device=device)
+            self._device = device
+            logger.info(f"F5-TTS loaded on {device}")
 
     def synthesize(self, text, output_path=None, language='en', **kwargs):
         self._ensure_loaded()
@@ -1526,13 +1606,13 @@ class _LazyF5:
             import tempfile
             output_path = tempfile.mktemp(suffix='.wav')
         ref = kwargs.get('ref_voice', self._ref_voice)
-        self._model.infer(
+        _run_with_timeout(lambda: _oom_guard(lambda: self._model.infer(
             ref_file=ref,
             ref_text=self._ref_text,
             gen_text=text,
             file_wave=output_path,
             speed=1.0,
-        )
+        ), self._device))
         return output_path
 
     def unload_model(self):
@@ -1540,12 +1620,7 @@ class _LazyF5:
             del self._model
             self._model = None
             gc.collect()
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except Exception:
-                pass
+            _clear_cuda_cache()
 
 
 class _LazyChatterboxTurbo:
@@ -1562,26 +1637,34 @@ class _LazyChatterboxTurbo:
             import torchaudio
             from chatterbox.tts_turbo import ChatterboxTurboTTS
             self._torchaudio = torchaudio
+            device = _suggest_device('tts_chatterbox_turbo')
             # Workaround: safetensors segfaults on sequential CUDA loads on Windows.
             # Patch load_file to always load to CPU first, then .to(device) handles CUDA.
-            if sys.platform == 'win32':
+            if sys.platform == 'win32' and device == 'cuda':
                 import safetensors.torch as _st
                 _orig_load = _st.load_file
                 def _cpu_first_load(path, device=None):
                     return _orig_load(path, device='cpu')
                 _st.load_file = _cpu_first_load
                 try:
-                    self._model = ChatterboxTurboTTS.from_pretrained(device="cuda")
+                    self._model = ChatterboxTurboTTS.from_pretrained(device=device)
                 finally:
                     _st.load_file = _orig_load
             else:
-                self._model = ChatterboxTurboTTS.from_pretrained(device="cuda")
+                self._model = ChatterboxTurboTTS.from_pretrained(device=device)
+            self._device = device
             self._sr = self._model.sr
 
     def synthesize(self, text, output_path=None, language='en', **kwargs):
         self._ensure_loaded()
         ref = kwargs.get('ref_voice', self._ref_voice)
-        wav = self._model.generate(text, audio_prompt_path=ref)
+
+        def _infer():
+            return _oom_guard(
+                lambda: self._model.generate(text, audio_prompt_path=ref),
+                getattr(self, '_device', None))
+
+        wav = _run_with_timeout(_infer)
         # Pad 0.3s silence to prevent chopped ending
         import torch as _t
         pad = _t.zeros(1, int(self._sr * 0.3), dtype=wav.dtype, device=wav.device)
@@ -1597,12 +1680,7 @@ class _LazyChatterboxTurbo:
             del self._model
             self._model = None
             gc.collect()
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except Exception:
-                pass
+            _clear_cuda_cache()
 
 
 class _LazyChatterboxMultilingual:
@@ -1619,13 +1697,18 @@ class _LazyChatterboxMultilingual:
             import torchaudio
             from chatterbox.tts import ChatterboxMultilingualTTS
             self._torchaudio = torchaudio
-            self._model = ChatterboxMultilingualTTS.from_pretrained(device="cuda")
+            device = _suggest_device('tts_chatterbox_ml')
+            self._model = ChatterboxMultilingualTTS.from_pretrained(device=device)
+            self._device = device
             self._sr = self._model.sr
 
     def synthesize(self, text, output_path=None, language='en', **kwargs):
         self._ensure_loaded()
         ref = kwargs.get('ref_voice', self._ref_voice)
-        wav = self._model.generate(text, audio_prompt_path=ref, language_id=language)
+        wav = _run_with_timeout(
+            lambda: _oom_guard(
+                lambda: self._model.generate(text, audio_prompt_path=ref, language_id=language),
+                getattr(self, '_device', None)))
         if output_path is None:
             import tempfile
             output_path = tempfile.mktemp(suffix='.wav')
@@ -1637,12 +1720,7 @@ class _LazyChatterboxMultilingual:
             del self._model
             self._model = None
             gc.collect()
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except Exception:
-                pass
+            _clear_cuda_cache()
 
 
 class _LazyIndicParler:
@@ -1668,20 +1746,9 @@ class _LazyIndicParler:
     def _ensure_loaded(self):
         if self._model is not None:
             return
-        import torch
         from parler_tts import ParlerTTSForConditionalGeneration
         from transformers import AutoTokenizer
-        # Use GPU only if enough free VRAM (model ~1.2GB + inference ~2GB)
-        _use_gpu = False
-        if torch.cuda.is_available():
-            try:
-                _free = torch.cuda.mem_get_info()[0] / (1024**3)
-                _use_gpu = _free >= 2.0  # Model ~1.2GB + inference buffers
-                if not _use_gpu:
-                    logger.info(f"Indic Parler: {_free:.1f}GB VRAM free < 2GB — using CPU")
-            except Exception:
-                pass
-        self._device = 'cuda:0' if _use_gpu else 'cpu'
+        self._device = _suggest_device('tts_indic_parler')
         self._model = ParlerTTSForConditionalGeneration.from_pretrained(
             'ai4bharat/indic-parler-tts').to(self._device)
         self._tokenizer = AutoTokenizer.from_pretrained('ai4bharat/indic-parler-tts')
@@ -1704,13 +1771,17 @@ class _LazyIndicParler:
         desc_inputs = self._desc_tokenizer(description, return_tensors='pt').to(self._device)
         prompt_inputs = self._tokenizer(text, return_tensors='pt').to(self._device)
         max_tokens = max(3000, min(8000, len(text) * 50))
-        generation = self._model.generate(
-            input_ids=desc_inputs.input_ids,
-            attention_mask=desc_inputs.attention_mask,
-            prompt_input_ids=prompt_inputs.input_ids,
-            prompt_attention_mask=prompt_inputs.attention_mask,
-            max_new_tokens=max_tokens,
-        )
+
+        def _infer():
+            return _oom_guard(lambda: self._model.generate(
+                input_ids=desc_inputs.input_ids,
+                attention_mask=desc_inputs.attention_mask,
+                prompt_input_ids=prompt_inputs.input_ids,
+                prompt_attention_mask=prompt_inputs.attention_mask,
+                max_new_tokens=max_tokens,
+            ), self._device)
+
+        generation = _run_with_timeout(_infer)
         return generation.cpu().float().numpy().squeeze()
 
     @staticmethod
@@ -1780,12 +1851,7 @@ class _LazyIndicParler:
             del self._model, self._tokenizer, self._desc_tokenizer
             self._model = self._tokenizer = self._desc_tokenizer = None
             gc.collect()
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except Exception:
-                pass
+            _clear_cuda_cache()
 
 
 class _LazyCosyVoice3:
@@ -1815,7 +1881,13 @@ class _LazyCosyVoice3:
             from huggingface_hub import snapshot_download
             snapshot_download('FunAudioLLM/Fun-CosyVoice3-0.5B-2512',
                               local_dir=model_dir)
+        # CosyVoice AutoModel loads on CUDA by default (no device param).
+        # Pre-check VRAM so we don't trigger a C-level CUDA abort on load.
+        device = _suggest_device('tts_cosyvoice3')
+        if device == 'cpu':
+            raise RuntimeError("CosyVoice3 requires GPU but VRAM insufficient — skipping")
         self._model = AutoModel(model_dir=model_dir)
+        self._device = 'cuda'
         self._sr = self._model.sample_rate
         logger.info(f"CosyVoice3 loaded, sr={self._sr}")
 
@@ -1830,45 +1902,41 @@ class _LazyCosyVoice3:
         # CosyVoice3 requires <|endofprompt|> token in text
         cv3_text = f'You are a helpful assistant.<|endofprompt|>{text}'
         ref = kwargs.get('ref_voice', self._ref_voice)
-        # Cross-lingual with reference voice
-        if ref and os.path.isfile(ref):
-            for chunk in self._model.inference_cross_lingual(
-                    cv3_text, ref, stream=False):
-                audio = chunk['tts_speech']
-                # Pad 0.3s silence to prevent chopped ending
-                import torch as _t
-                pad = _t.zeros(1, int(self._sr * 0.3), dtype=audio.dtype, device=audio.device)
-                audio = _t.cat([audio, pad], dim=-1)
-                torchaudio.save(output_path, audio, self._sr)
-                return output_path
-        else:
-            spks = self._model.list_available_spks()
-            spk = spks[0] if spks else None
-            if not spk:
-                logger.error("CosyVoice3: no speakers available for SFT")
+
+        def _infer():
+            def _gpu_infer():
+                if ref and os.path.isfile(ref):
+                    for chunk in self._model.inference_cross_lingual(
+                            cv3_text, ref, stream=False):
+                        return chunk['tts_speech']
+                else:
+                    spks = self._model.list_available_spks()
+                    spk = spks[0] if spks else None
+                    if not spk:
+                        logger.error("CosyVoice3: no speakers available for SFT")
+                        return None
+                    for chunk in self._model.inference_sft(
+                            cv3_text, spk, stream=False):
+                        return chunk['tts_speech']
                 return None
-            for chunk in self._model.inference_sft(
-                    cv3_text, spk, stream=False):
-                audio = chunk['tts_speech']
-                # Pad 0.3s silence to prevent chopped ending
-                import torch as _t
-                pad = _t.zeros(1, int(self._sr * 0.3), dtype=audio.dtype, device=audio.device)
-                audio = _t.cat([audio, pad], dim=-1)
-                torchaudio.save(output_path, audio, self._sr)
-                return output_path
-        return None
+            return _oom_guard(_gpu_infer, getattr(self, '_device', None))
+
+        audio = _run_with_timeout(_infer)
+        if audio is None:
+            return None
+        # Pad 0.3s silence to prevent chopped ending
+        import torch as _t
+        pad = _t.zeros(1, int(self._sr * 0.3), dtype=audio.dtype, device=audio.device)
+        audio = _t.cat([audio, pad], dim=-1)
+        torchaudio.save(output_path, audio, self._sr)
+        return output_path
 
     def unload_model(self):
         if self._model:
             del self._model
             self._model = None
             gc.collect()
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except Exception:
-                pass
+            _clear_cuda_cache()
 
 
 class _LazyPiper:

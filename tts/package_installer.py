@@ -180,13 +180,8 @@ def get_torch_variant() -> str:
 def has_nvidia_gpu() -> bool:
     """Check if NVIDIA GPU is available via nvidia-smi."""
     try:
-        si = None
-        cf = 0
-        if sys.platform == 'win32':
-            si = subprocess.STARTUPINFO()
-            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            si.wShowWindow = 0
-            cf = subprocess.CREATE_NO_WINDOW
+        from tts import hidden_startupinfo
+        si, cf = hidden_startupinfo()
         result = subprocess.run(
             ['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
             capture_output=True, text=True, timeout=5,
@@ -259,13 +254,8 @@ def _run_pip(args: list[str], progress_cb: Callable | None = None,
         progress_cb(f"Running pip: {' '.join(args[:4])}...")
 
     try:
-        si = None
-        cf = 0
-        if sys.platform == 'win32':
-            si = subprocess.STARTUPINFO()
-            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            si.wShowWindow = 0
-            cf = subprocess.CREATE_NO_WINDOW
+        from tts import hidden_startupinfo
+        si, cf = hidden_startupinfo()
 
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout,

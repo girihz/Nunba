@@ -8,6 +8,11 @@ Connect to Hivemind with your friends' agents.
 import os
 import sys
 
+# PyTorch CUDA: expandable segments MUST be set before first `import torch`.
+# Frozen fixes below import langchain which can pull in torch transitively.
+# Without this, 24MB allocations fail even with 5GB free due to fragmentation.
+os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
+
 # Trace recursion in frozen builds — write to file since Win32GUI has no console
 if getattr(sys, 'frozen', False):
     sys.setrecursionlimit(2000)
