@@ -1817,13 +1817,24 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
     })();
 
     const unsubTts = realtimeService.on('tts', (data) => {
+      console.log('[TTS] Event received:', data.generated_audio_url, 'req:', data.request_id);
       if (data.request_id && requestIdRef.current && data.request_id !== requestIdRef.current) {
-        return; // stale audio from previous request
+        console.log('[TTS] Skipped stale:', data.request_id, '!= current:', requestIdRef.current);
+        return;
       }
       if (data.generated_audio_url) {
+        console.log('[TTS] Playing audio:', data.generated_audio_url);
         ttsAudio.src = data.generated_audio_url;
-        ttsAudio.play().catch((err) => {
-          console.warn('TTS autoplay blocked:', err.message);
+        ttsAudio.play().then(() => {
+          console.log('[TTS] Audio playing OK');
+        }).catch((err) => {
+          console.error('[TTS] Play FAILED:', err.message);
+          // Fallback: try with user gesture simulation via click handler
+          const resumeAudio = () => {
+            ttsAudio.play().catch(() => {});
+            document.removeEventListener('click', resumeAudio);
+          };
+          document.addEventListener('click', resumeAudio, { once: true });
         });
       }
     });
@@ -2619,6 +2630,20 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
   };
 
   const handleSend = async () => {
+    // Prime TTS audio element on user gesture — required by WebView2 autoplay policy.
+    // Without this, audio.play() from async SSE callbacks is silently blocked.
+    try {
+      const ttsEl = document.getElementById('nunba-tts-audio');
+      if (ttsEl && ttsEl.paused && !ttsEl._primed) {
+        ttsEl.volume = 0;
+        ttsEl.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+        await ttsEl.play().catch(() => {});
+        ttsEl.volume = 1;
+        ttsEl._primed = true;
+        console.log('[TTS] Audio element primed on user gesture');
+      }
+    } catch {}
+
     // Barge-in: stop any playing TTS when user sends a new message
     if (tts.isSpeaking) {
       tts.stop();
@@ -2895,7 +2920,8 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
               const assistantMessage = {
                 type: 'assistant',
                 content: responseText,
-                source: resultData.source || null,
+                source: resultData.source || 'langchain_local',
+                timestamp: new Date(),
               };
               setMessages((prev) => {
                 const updated = [...prev];

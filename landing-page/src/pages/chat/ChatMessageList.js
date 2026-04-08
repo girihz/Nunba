@@ -433,22 +433,20 @@ const ChatMessageList = ({
                         <div>{message.content}</div>
                       )}
                       {/* Intelligence source badge + timestamp */}
-                      <div className="flex items-center justify-between mt-2 opacity-50 text-xs">
-                        {message.source && (
-                          <div className="flex items-center gap-1">
-                            <span
-                              className="inline-block w-2 h-2 rounded-full"
-                              style={{
-                                backgroundColor: message.source?.includes('local')
-                                  ? '#2ECC71'
-                                  : '#6C63FF',
-                              }}
-                            />
-                            {message.source?.includes('local') ? 'Local' : 'Hive'}
-                          </div>
-                        )}
+                      <div className="flex items-center gap-2 mt-2 text-xs" style={{ color: 'rgba(255,255,255,0.45)' }}>
+                        <div className="flex items-center gap-1">
+                          <span
+                            className="inline-block w-2 h-2 rounded-full"
+                            style={{
+                              backgroundColor: message.source?.includes('local') || !message.source
+                                ? '#2ECC71'
+                                : '#6C63FF',
+                            }}
+                          />
+                          {message.source?.includes('local') || !message.source ? 'Local' : 'Hive'}
+                        </div>
                         {message.timestamp && (
-                          <span>{formatTimestamp(message.timestamp)}</span>
+                          <span>&middot; {formatTimestamp(message.timestamp)}</span>
                         )}
                       </div>
                     </>
