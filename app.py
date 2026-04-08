@@ -2870,6 +2870,13 @@ def _import_main_app():
     # Get the Flask app instance from main.py
     flask_app = main_module.app
 
+    # Expose broadcast_sse_event on __main__ so HARTOS can find it.
+    # HARTOS does `import __main__; __main__.broadcast_sse_event(...)`.
+    # In frozen builds, __main__ is app.py, but broadcast_sse_event lives in main.py.
+    if hasattr(main_module, 'broadcast_sse_event'):
+        import __main__
+        __main__.broadcast_sse_event = main_module.broadcast_sse_event
+
     # Start background services (TTS warm-up, vision, diarization, langchain)
     # main.py's if __name__=='__main__' block doesn't run when imported as module
     if hasattr(main_module, 'start_background_services'):
