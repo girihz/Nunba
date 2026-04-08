@@ -1757,7 +1757,7 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
         activeWorker = crossbarWorker;
         setWorker(crossbarWorker);
         initGameRealtime(crossbarWorker);
-        realtimeService.init(crossbarWorker);
+        realtimeService.init(crossbarWorker, { userId: effectiveUserId || 'guest' });
 
         if (decryptedUserId) {
           logger.log(
@@ -1796,85 +1796,49 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
     };
   }, [decryptedUserId]);
 
-  // ── Setup progress SSE listener ──────────────────────────────────────
-  // Listens for long-running setup job progress (TTS engine install, model
-  // downloads, etc.) and adds them as chat messages with SetupProgressCard.
+  // ── Realtime event subscriptions (transport-agnostic) ─────────────────
+  // All events arrive via realtimeService (WAMP primary, SSE fallback).
+  // No transport-specific code here — realtimeService handles reconnection,
+  // dedup, and guest/JWT auth internally.
   useEffect(() => {
-    // Connect SSE for push events (TTS audio, setup progress).
-    // JWT for authenticated users; guest mode uses user_id param (local/bundled).
-    const jwt = localStorage.getItem('jwt');
-    const baseUrl = window.location.origin;
-    const sseUrl = jwt
-      ? `${baseUrl}/api/social/events/stream?token=${encodeURIComponent(jwt)}`
-      : `${baseUrl}/api/social/events/stream?user_id=${encodeURIComponent(effectiveUserId || 'guest')}`;
-
-    let eventSource;
-    try {
-      eventSource = new EventSource(sseUrl);
-    } catch {
-      return; // EventSource not available
-    }
-
-    // Kill connection on auth/server errors to prevent reconnect storm
-    eventSource.onerror = () => {
-      if (eventSource.readyState === EventSource.CLOSED) return;
-      eventSource.close();
-    };
-
-    // TTS audio push — play only if request_id matches current chat request
-    eventSource.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (data.action === 'TTS' && data.generated_audio_url) {
-          // Skip stale audio from previous requests (same as Android latestRequestId)
-          if (data.request_id && requestIdRef.current && data.request_id !== requestIdRef.current) {
-            logger.log('SSE TTS: stale request_id, skipping', data.request_id, '!=', requestIdRef.current);
-            return;
-          }
-          logger.log('SSE TTS AUDIO:', data.generated_audio_url);
-          const audio = new Audio(data.generated_audio_url);
-          audio.play().catch(() => {});
-        }
-      } catch { /* ignore parse errors */ }
-    };
-
-    eventSource.addEventListener('setup_progress', (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (data.type !== 'setup_progress') return;
-
-        setMessages((prev) => {
-          // Find existing card for this job or create new one
-          const existingIdx = prev.findIndex(
-            (m) => m.type === 'setup_progress' && m.jobType === data.job_type
-          );
-
-          if (existingIdx >= 0) {
-            // Append step to existing card
-            const updated = [...prev];
-            updated[existingIdx] = {
-              ...updated[existingIdx],
-              steps: [...updated[existingIdx].steps, data],
-              isComplete: data.message?.includes('ready to use') || data.message?.includes('Ready'),
-            };
-            return updated;
-          }
-
-          // New job — insert progress card
-          return [...prev, {
-            type: 'setup_progress',
-            jobType: data.job_type,
-            steps: [data],
-            isComplete: false,
-            timestamp: new Date(),
-          }];
-        });
-      } catch { /* ignore parse errors */ }
+    // TTS audio — play when received, skip stale request_ids
+    const unsubTts = realtimeService.on('tts', (data) => {
+      if (data.request_id && requestIdRef.current && data.request_id !== requestIdRef.current) {
+        return; // stale audio from previous request
+      }
+      if (data.generated_audio_url) {
+        const audio = new Audio(data.generated_audio_url);
+        audio.play().catch(() => {});
+      }
     });
 
-    return () => {
-      if (eventSource) eventSource.close();
-    };
+    // Setup progress — TTS engine install, model downloads
+    const unsubSetup = realtimeService.on('setup_progress', (data) => {
+      if (data.type !== 'setup_progress') return;
+      setMessages((prev) => {
+        const existingIdx = prev.findIndex(
+          (m) => m.type === 'setup_progress' && m.jobType === data.job_type
+        );
+        if (existingIdx >= 0) {
+          const updated = [...prev];
+          updated[existingIdx] = {
+            ...updated[existingIdx],
+            steps: [...updated[existingIdx].steps, data],
+            isComplete: data.message?.includes('ready to use') || data.message?.includes('Ready'),
+          };
+          return updated;
+        }
+        return [...prev, {
+          type: 'setup_progress',
+          jobType: data.job_type,
+          steps: [data],
+          isComplete: false,
+          timestamp: new Date(),
+        }];
+      });
+    });
+
+    return () => { unsubTts(); unsubSetup(); };
   }, []);
 
   useEffect(() => {

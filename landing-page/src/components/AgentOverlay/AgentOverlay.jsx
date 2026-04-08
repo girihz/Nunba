@@ -413,27 +413,13 @@ export default function AgentOverlay({ navigate, onInlineChatCard }) {
   }, [navigate, onInlineChatCard, dismiss]);
 
   useEffect(() => {
-    // Primary: realtimeService (WAMP or SSE, whichever is connected)
+    // Single subscription — realtimeService handles all transports
+    // (WAMP primary, SSE fallback with auto-reconnect and dedup).
+    // No transport-specific code here.
     const unsub = realtimeService.on('agent.ui.update', handleEvent);
-
-    // Fallback: direct SSE if realtimeService doesn't bridge agent.ui.update
-    let fallbackEvtSrc = null;
-    const fallbackTimer = setTimeout(() => {
-      // If no WAMP events after 10s, open direct SSE
-      fallbackEvtSrc = new EventSource(`${API_BASE_URL}/api/notifications/stream`);
-      fallbackEvtSrc.onmessage = (e) => {
-        try {
-          const events = JSON.parse(e.data);
-          if (Array.isArray(events)) events.forEach(handleEvent);
-          else handleEvent(events);
-        } catch { /* ignore parse errors */ }
-      };
-    }, 10000);
 
     return () => {
       unsub();
-      clearTimeout(fallbackTimer);
-      if (fallbackEvtSrc) fallbackEvtSrc.close();
       Object.values(timersRef.current).forEach(clearTimeout);
     };
   }, [handleEvent]);
