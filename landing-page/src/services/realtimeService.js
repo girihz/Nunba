@@ -48,7 +48,13 @@ class RealtimeService {
   init(crossbarWorker, opts = {}) {
     if (opts.userId) this._userId = opts.userId;
 
-    if (_worker !== crossbarWorker) {
+    // Always open SSE — even if worker is null (failed to create).
+    // Local events (TTS audio, agent UI) only arrive via SSE.
+    if (!this._sseConnected) {
+      this._openSSE();
+    }
+
+    if (crossbarWorker && _worker !== crossbarWorker) {
       // Clean up old handler on the OLD worker before overwriting
       const oldWorker = _worker;
       _worker = crossbarWorker;

@@ -1778,6 +1778,9 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
       } catch (error) {
         console.error('❌ Worker initialization error:', error);
         setConnectionStatus('Failed to Initialize');
+        // SSE must open even if crossbar worker fails — local TTS/agent events
+        // only arrive via SSE, not WAMP. Pass null worker, SSE opens immediately.
+        realtimeService.init(null, { userId: effectiveUserId || 'guest' });
       } finally {
         isInitializing = false;
       }
