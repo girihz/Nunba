@@ -3589,10 +3589,11 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
           toggleDropdown={toggleDropdown}
         />
 
-        <div className="flex flex-col h-screen bg-black w-full overflow-y-auto overflow-x-hidden">
+        <div className="flex flex-col h-screen bg-black w-full overflow-hidden">
           {/* VoiceVisualizer removed from here — lives in the media column */}
           <div className="w-full flex flex-col md:flex-row-reverse flex-1 min-h-0">
-            {/* Chat/Messages section - Now on the left for wider screens */}
+            {/* Media column — fixed height in portrait, sticky in landscape.
+                Does NOT scroll with chat. */}
 
             <div
               className={`${
@@ -3600,7 +3601,7 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
                   ? (isTextMode ? 'w-0 overflow-hidden' : (videoUrl || mediaMode === 'audio' ? 'w-[30%]' : 'w-0 overflow-hidden'))
                   : 'w-full'
               } ${
-                window.innerWidth <= 768 ? (isTextMode ? '' : (videoUrl || mediaMode === 'audio' ? 'h-[35vh] mb-4' : '')) : ''
+                window.innerWidth <= 768 ? (isTextMode ? '' : (videoUrl || mediaMode === 'audio' ? 'h-[35vh] shrink-0' : '')) : ''
               } relative flex justify-center items-center transition-all duration-300 md:sticky md:top-0 md:h-screen`}
               style={{ overflow: 'visible' }}
             >
@@ -3746,11 +3747,11 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
             </div>
 
             <div
-              className={`flex-1 w-full ${
+              className={`flex-1 w-full min-h-0 ${
                 !isTextMode && videoUrl && !uploadedImage && !uploadedPdf && window.innerWidth > 768
                   ? 'md:w-[60%]'
                   : 'md:w-full'
-              } overflow-x-clip pt-2 md:pt-0`}
+              } overflow-x-clip overflow-y-auto pt-2 md:pt-0`}
             >
               {messages.length === 0 ? (
                 <>
