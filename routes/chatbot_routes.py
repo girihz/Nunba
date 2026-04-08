@@ -1839,19 +1839,10 @@ def chat_route():
         else:
             media_mode = 'text'   # Cloud/web default
     audio_mode = media_mode in ('audio', 'video')
-    if audio_mode:
-        from flask import after_this_request
-        @after_this_request
-        def _tts_after_response(response):
-            try:
-                resp_data = response.get_json(silent=True) or {}
-                resp_text = resp_data.get('text') or resp_data.get('response') or ''
-                if resp_text and response.status_code == 200:
-                    from hart_intelligence_entry import _tts_synthesize_and_publish
-                    _tts_synthesize_and_publish(resp_text, user_id, request_id)
-            except Exception as e:
-                logger.error(f"TTS after_this_request failed: {e}", exc_info=True)
-            return response
+    # TTS is handled INSIDE HARTOS /chat handler (line 5449 in hart_intelligence_entry.py).
+    # Do NOT call _tts_synthesize_and_publish here — it creates a duplicate call that
+    # races with the HARTOS one and kills the executor via after_this_request timing
+    # (Flask test_client context closes → "cannot schedule new futures after shutdown").
 
     # Find the agent configuration
     agent_config = None
