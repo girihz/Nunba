@@ -61,7 +61,7 @@ def _run_in_embed(code: str, extra_argv: list = None, timeout: int = 15) -> subp
     if extra_argv:
         cmd.extend(extra_argv)
 
-    from tts import hidden_startupinfo
+    from tts._subprocess import hidden_startupinfo
     si, cf = hidden_startupinfo()
     return subprocess.run(
         cmd, capture_output=True, text=True, timeout=timeout,

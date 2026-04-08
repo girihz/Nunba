@@ -133,7 +133,7 @@ class PiperTTS:
         # Check PATH
         try:
             cmd = "where" if sys.platform == "win32" else "which"
-            from tts import hidden_startupinfo
+            from tts._subprocess import hidden_startupinfo
             si, cf = hidden_startupinfo()
             result = subprocess.run(
                 [cmd, "piper"],
@@ -371,7 +371,7 @@ class PiperTTS:
                 '--length_scale', str(1.0 / speed)
             ]
 
-            from tts import hidden_startupinfo
+            from tts._subprocess import hidden_startupinfo
             si, cf = hidden_startupinfo()
 
             # Pipe text to stdin

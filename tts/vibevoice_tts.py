@@ -76,7 +76,7 @@ def _detect_nvidia() -> dict | None:
     if not nvidia_smi:
         return None
     try:
-        from tts import hidden_startupinfo
+        from tts._subprocess import hidden_startupinfo
         _si, _cf = hidden_startupinfo()
         proc = subprocess.run(
             [nvidia_smi, '--query-gpu=name,memory.total,driver_version',
@@ -108,7 +108,7 @@ def _detect_amd() -> dict | None:
     if not rocm_smi:
         return None
     try:
-        from tts import hidden_startupinfo
+        from tts._subprocess import hidden_startupinfo
         _si, _cf = hidden_startupinfo()
         # Get GPU name
         proc_name = subprocess.run(
@@ -166,7 +166,7 @@ def _detect_gpu_wmic() -> dict | None:
     if sys.platform != 'win32':
         return None
     try:
-        from tts import hidden_startupinfo
+        from tts._subprocess import hidden_startupinfo
         _si, _cf = hidden_startupinfo()
         proc = subprocess.run(
             ['powershell', '-NoProfile', '-Command',
