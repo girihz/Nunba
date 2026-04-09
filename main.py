@@ -1749,6 +1749,9 @@ def broadcast_sse_event(event_type, data, user_id=None):
     import json
     msg = f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
     now = time.time()
+    logging.info(f"broadcast_sse_event: type={event_type}, user_id={user_id}, "
+                 f"clients={list(_sse_clients.keys())}, "
+                 f"client_count={sum(len(v) for v in _sse_clients.values())}")
     with _sse_lock:
         if user_id is not None:
             clients = _sse_clients.get(user_id, [])
