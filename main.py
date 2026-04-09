@@ -2655,12 +2655,16 @@ def start_background_services():
     vision_thread = threading.Thread(target=_start_vision_service, daemon=True)
     vision_thread.start()
 
-    # Streaming STT WebSocket server (faster-whisper).
-    # Whisper loads lazily on first transcription request — no need to pre-load.
-    # Pre-loading claims 3GB VRAM on GPU, starving F5-TTS (also needs GPU).
-    # STT works on-demand via the /stt endpoint without the streaming server.
-    # TODO: re-enable with lazy GPU load when user starts recording.
-    logging.info("Streaming STT server deferred (VRAM reserved for TTS)")
+    # Start streaming STT WebSocket server (faster-whisper, real-time mic input).
+    # Whisper model loads lazily on first transcription — NOT at server start.
+    # This prevents whisper from claiming 3GB GPU VRAM before F5-TTS needs it.
+    try:
+        from integrations.service_tools.whisper_tool import start_stt_stream_server
+        stt_port = start_stt_stream_server()
+        if stt_port:
+            logging.info(f"Streaming STT WebSocket server started on port {stt_port}")
+    except Exception as e:
+        logging.debug(f"Streaming STT server skipped: {e}")
 
     # Start DiarizationService (speaker diarization sidecar) in daemon thread
     diarization_thread = threading.Thread(target=_start_diarization_service, daemon=True)
@@ -2779,17 +2783,41 @@ def start_background_services():
             logging.info(f"TTS warm-up: user prefers '{preferred_lang}', selecting GPU engine...")
             engine.set_language(preferred_lang)
 
-            # set_language() creates the backend instance (lazy wrapper).
-            # The actual GPU model loads on the first real synthesize() call —
-            # no test synthesis needed. Forcing one here risks:
-            #   1. Concurrent GPU inference with chat thread (no lock → crash)
-            #   2. Loading F5 on GPU before llama-server → VRAM contention
-            #   3. CUDA OOM that corrupts state for all subsequent calls
-            # Wait briefly for backend switch to settle, then report readiness.
+            # Wait for backend switch to settle:
             for _wait in range(20):
                 if not getattr(engine, '_pending_backend', None):
                     break
                 time.sleep(0.5)
+
+            # Pre-load F5 on GPU AFTER llama-server is ready.
+            # Wait for llama-server to finish loading so VRAM settles.
+            # Then force F5 model load via a test synthesis.
+            # The _synth_lock serializes with chat threads (no race condition).
+            # The 60s idle timer will unload F5 if no real TTS comes.
+            logging.info("TTS warm-up: waiting for llama-server to settle before F5 pre-load...")
+            for _llm_wait in range(30):  # up to 90s
+                try:
+                    import urllib.request as _ur
+                    _h = _ur.urlopen('http://127.0.0.1:8080/health', timeout=2)
+                    _status = _h.read()
+                    _h.close()
+                    if b'"ok"' in _status:
+                        logging.info("TTS warm-up: llama-server ready, pre-loading F5...")
+                        break
+                except Exception:
+                    pass
+                time.sleep(3)
+
+            # Force F5 model load with a short test sentence:
+            import tempfile as _tf
+            _test_path = os.path.join(_tf.gettempdir(), '_nunba_tts_warmup.wav')
+            try:
+                engine.synthesize("test", output_path=_test_path, language=preferred_lang)
+                if os.path.exists(_test_path):
+                    os.unlink(_test_path)
+                logging.info("TTS warm-up: F5 pre-loaded on GPU — first response will be fast")
+            except Exception as _se:
+                logging.info(f"TTS warm-up: pre-load skipped ({_se}) — first response uses Piper")
 
             backend = engine.get_info().get('active_backend', 'unknown')
             logging.info(f"TTS engine warmed up: {backend} (language={preferred_lang})")
