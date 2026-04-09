@@ -2650,6 +2650,12 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
       setDuration(0);
       setAnimatingMessageIndex(null);
     }
+    // Also stop F5/Piper TTS audio element (SSE-pushed audio)
+    const ttsEl = document.getElementById('nunba-tts-audio');
+    if (ttsEl && !ttsEl.paused) {
+      ttsEl.pause();
+      ttsEl.currentTime = 0;
+    }
 
     const origin = window.location.origin.toLowerCase();
     const pathname = window.location.pathname.toLowerCase();
