@@ -2952,6 +2952,21 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
               pushNotification({ type: 'info', message: 'Loading tools... try again in a moment' });
             }
 
+            // LiquidActionBar: if the Navigate_App tool fired, the backend
+            // attached a ui_actions array. Republish via the window event
+            // bus so the floating bar reshuffles to surface the resolved
+            // destination first. Swallow errors so a malformed payload
+            // never breaks the chat flow.
+            if (Array.isArray(resultData.ui_actions) && resultData.ui_actions.length > 0) {
+              try {
+                window.dispatchEvent(
+                  new CustomEvent('nunba:ui_actions', { detail: resultData.ui_actions }),
+                );
+              } catch (e) {
+                logger.warn('liquid_action_bar publish failed', e);
+              }
+            }
+
             // Local backend returns 'text' field, not 'response'
             // Skip assistant message when a card already consumed the text
             const responseText = resultData.text || resultData.response;

@@ -139,6 +139,130 @@ def _detect_create_agent_intent(text):
     return False
 
 
+# ---------------------------------------------------------------------------
+# Channel connect intent: "connect to whatsapp", "add telegram", "link slack"
+# Delegates to the HARTOS Connect_Channel LangChain tool — that's still the
+# single registration code path. This detector just nudges the LLM by
+# injecting a hint so it reliably picks the tool instead of answering in
+# words.
+# ---------------------------------------------------------------------------
+_CONNECT_CHANNEL_VERBS = (
+    'connect', 'add', 'link', 'set up', 'setup', 'hook up', 'register',
+    'enable', 'activate', 'integrate',
+)
+# Matches every channel type registered in HARTOS integrations/channels/metadata
+_CHANNEL_NAMES = {
+    'whatsapp', 'telegram', 'discord', 'slack', 'email', 'gmail', 'outlook',
+    'sms', 'teams', 'messenger', 'facebook', 'instagram', 'twitter', 'x',
+    'linkedin', 'matrix', 'signal', 'viber', 'wechat', 'line', 'kik', 'skype',
+    'rocket.chat', 'rocket chat', 'rocketchat', 'mattermost', 'zulip', 'irc',
+    'xmpp', 'reddit', 'youtube', 'twitch', 'webex',
+}
+
+def _detect_channel_connect_intent(text):
+    """Return the channel name if the message looks like 'connect X'
+    where X is a supported channel — else None.
+
+    Runs in 0ms before the LLM sees the prompt. Deterministic: only matches
+    clear cases, falls through for ambiguous ones so the LLM can still decide.
+    """
+    if not text:
+        return None
+    t = text.lower().strip().rstrip('.!?')
+    # Quick reject — if no verb, bail
+    if not any(v in t for v in _CONNECT_CHANNEL_VERBS):
+        return None
+    # Try to find a channel name that appears after a connect verb.
+    # Simple heuristic: look for "<verb> [to|my|up|with] <channel>" pattern.
+    import re as _re
+    verb_alt = '|'.join(_re.escape(v) for v in _CONNECT_CHANNEL_VERBS)
+    chan_alt = '|'.join(
+        _re.escape(c) for c in sorted(_CHANNEL_NAMES, key=len, reverse=True)
+    )
+    pattern = (
+        rf'\b(?:{verb_alt})\b(?:\s+(?:to|with|up|my|a|an|the))*\s+'
+        rf'(?:my\s+)?({chan_alt})\b'
+    )
+    m = _re.search(pattern, t)
+    if m:
+        channel = m.group(1)
+        # Normalize variants
+        if channel in ('x',):
+            channel = 'twitter'
+        if channel in ('rocket chat', 'rocketchat'):
+            channel = 'rocket.chat'
+        return channel
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Casual-conversation classifier: short chit-chat doesn't need the full
+# LangChain tool pipeline. Routing obvious greetings/acknowledgements
+# through casual_conv=True cuts a ~3s tool-resolution pass off of every
+# "hi" / "thanks" message. Ambiguous messages STAY on the tool path.
+# ---------------------------------------------------------------------------
+_CASUAL_EXACT = {
+    'hi', 'hello', 'hey', 'yo', 'sup', 'howdy', 'heya', 'hiya', 'hii', 'hiii',
+    'ok', 'okay', 'k', 'kk', 'cool', 'nice', 'great', 'awesome', 'sweet',
+    'thanks', 'thank you', 'thx', 'ty', 'tysm', 'thankyou', 'ta', 'cheers',
+    'yes', 'yep', 'yeah', 'yup', 'sure', 'no', 'nope', 'nah',
+    'bye', 'goodbye', 'cya', 'see ya', 'later', 'gn', 'goodnight', 'gm',
+    'good morning', 'good night', 'good evening', 'good afternoon',
+    'lol', 'lmao', 'haha', 'hehe', 'nice one', 'got it',
+    'proceed', 'continue', 'go ahead', 'go on',
+    'stop', 'cancel', 'nvm', 'never mind', 'forget it',
+    'how are you', 'how are you doing', 'hows it going', "how's it going",
+    "what's up", 'whats up',
+}
+
+# Verbs / nouns that always require TOOL access. If the message contains any,
+# casual_conv must stay False — the LLM needs tools to answer truthfully.
+_TOOL_TRIGGER_TOKENS = {
+    'open', 'launch', 'start', 'click', 'type', 'screenshot', 'see',
+    'search', 'google', 'find', 'look up', 'browse', 'fetch',
+    'read', 'write', 'create', 'delete', 'rename', 'move', 'copy', 'download',
+    'schedule', 'remind', 'alarm', 'calendar', 'cron', 'repeat',
+    'camera', 'mic', 'record', 'transcribe',
+    'code', 'debug', 'fix', 'run', 'execute', 'compile',
+    'remember', 'recall', 'forget', 'memory',
+    'connect', 'link', 'add', 'register', 'setup', 'set up', 'hook up',
+    'whatsapp', 'telegram', 'discord', 'slack', 'email', 'gmail',
+    'weather', 'news', 'stock', 'price', 'latest',
+    'image', 'picture', 'photo', 'video', 'generate', 'draw', 'paint',
+    'translate', 'summarize', 'summary', 'analyze',
+}
+
+def _is_casual_message(text):
+    """True if the message is simple chit-chat that doesn't need any tools.
+
+    Rules:
+      1. Must be ≤8 words (beyond that, assume it's substantive)
+      2. Must match a known casual phrase OR contain zero tool-trigger tokens
+      3. Must not end with '?' followed by content that needs lookup
+         (short acknowledgement questions like 'ok?' still count as casual)
+      4. Must not contain any tool-trigger token
+    """
+    if not text:
+        return False
+    t = text.lower().strip().rstrip('.!?')
+    if not t:
+        return False
+    words = t.split()
+    if len(words) > 8:
+        return False
+    # Tool triggers always force non-casual
+    for tok in _TOOL_TRIGGER_TOKENS:
+        if tok in t:
+            return False
+    # Exact-phrase allowlist OR very short
+    if t in _CASUAL_EXACT:
+        return True
+    if len(words) <= 3:
+        # Short and no tool trigger — probably ack/greeting
+        return True
+    return False
+
+
 # Agent-driven secret request detection
 # The LangChain agent/tools dictate when secrets are needed — NOT fuzzy regex on user input.
 # When a tool fails due to a missing API key, the agent's error response is detected here
@@ -1980,18 +2104,43 @@ def chat_route():
                     # Note: autonomous_creation is now detected by the LLM (Create_Agent tool)
                     # and passed back via the response from hart_intelligence, NOT by pattern matching
 
+                # Deterministic channel-connect nudge: if the user said "connect
+                # whatsapp" / "add telegram" / "link slack", inject a hint in
+                # front of the text so the LangChain LLM reliably picks the
+                # Connect_Channel tool instead of answering in words. Keeps the
+                # tool as the single registration path — zero parallel logic.
+                _channel_intent = _detect_channel_connect_intent(text)
+                if _channel_intent:
+                    logger.info(
+                        'Deterministic: detected channel-connect intent '
+                        f'for {_channel_intent} — nudging LLM to Connect_Channel tool'
+                    )
+                    text = (
+                        f"{text}\n\n[Hint: use the Connect_Channel tool with "
+                        f"input '{_channel_intent}' to start setup.]"
+                    )
+
                 # casual_conv=True hides tool descriptions from the LLM prompt.
                 # In bundled mode (Nunba desktop), the agent needs ALL tools
                 # (Visual_Context_Camera, memory, watchers, etc.) to compose
-                # capabilities agentically. Never casual in bundled mode.
+                # capabilities agentically — so historically we set casual=False
+                # there. But that was making "hi" and "thanks" take 3+s because
+                # every message went through the full tool-resolution pass.
+                # The fix: even in bundled mode, short chit-chat with no tool
+                # triggers gets the fast path. Substantive messages still hit
+                # the full tool pipeline.
                 _is_bundled = bool(os.environ.get('NUNBA_BUNDLED') or getattr(sys, 'frozen', False))
+                _is_chitchat = _is_casual_message(text)
                 _is_casual = (
                     not langchain_prompt_id
                     and not create_agent
                     and not agentic_execute
                     and not agentic_plan
-                    and not _is_bundled
+                    and not _channel_intent
+                    and (not _is_bundled or _is_chitchat)
                 )
+                if _is_casual and _is_bundled:
+                    logger.info(f'Fast path: casual chitchat in bundled mode → casual_conv=True')
 
                 result = hevolve_chat(
                     text=text,
