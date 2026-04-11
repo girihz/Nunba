@@ -233,6 +233,91 @@ class TestIsCasualMessage:
         assert self.is_casual("please open notepad now") is False
 
 
+class TestDetectCorrectionIntent:
+    """Deterministic marker-based detector: the user's message reads as
+    a correction of the previous assistant turn. Runs 0-ms, no model
+    call. A follow-up background thread pushes the correction into
+    HevolveAI via WorldModelBridge.submit_correction."""
+
+    @pytest.fixture(autouse=True)
+    def _import(self):
+        from routes.chatbot_routes import _detect_correction_intent
+        self.detect = _detect_correction_intent
+
+    @pytest.mark.parametrize('text', [
+        "no that's wrong",
+        "actually, the capital of France is Paris",
+        'I meant Python 3.11 not 3.10',
+        "You're wrong about that",
+        'Correction: the answer is 42',
+        'Not quite right',
+        "That's not right",
+        'incorrect',
+    ])
+    def test_positive_markers(self, text):
+        assert self.detect(text) is True
+
+    @pytest.mark.parametrize('text', [
+        'thanks',
+        'how do you work',
+        'open notepad',
+        'what is python',
+        'could you explain more',
+        '',
+    ])
+    def test_negative_no_marker(self, text):
+        assert self.detect(text) is False
+
+    def test_none_input_safe(self):
+        assert self.detect(None) is False
+
+
+class TestSubmitCorrectionAsync:
+    """The correction submission must be fire-and-forget and never
+    raise into the chat response path, even if WorldModelBridge is
+    broken or HevolveAI is offline."""
+
+    def test_spawns_daemon_thread(self):
+        from routes.chatbot_routes import _submit_correction_async
+        with patch('threading.Thread') as mock_thread:
+            mock_thread.return_value = MagicMock()
+            _submit_correction_async('old', 'new', user_id='u1')
+            mock_thread.assert_called_once()
+            assert mock_thread.call_args.kwargs.get('daemon') is True
+            assert mock_thread.call_args.kwargs.get('name') == 'submit_correction'
+
+    def test_worker_calls_bridge_with_right_args(self):
+        from routes.chatbot_routes import _submit_correction_async
+        captured = {}
+        def capture_thread(target=None, **kwargs):
+            captured['fn'] = target
+            return MagicMock()
+        mock_bridge = MagicMock()
+        with patch('threading.Thread', side_effect=capture_thread):
+            _submit_correction_async('old answer', 'actually correct', 'u1')
+        with patch('integrations.agent_engine.world_model_bridge.get_world_model_bridge',
+                   return_value=mock_bridge):
+            captured['fn']()
+        mock_bridge.submit_correction.assert_called_once()
+        call_kwargs = mock_bridge.submit_correction.call_args.kwargs
+        assert call_kwargs['original_response'] == 'old answer'
+        assert call_kwargs['corrected_response'] == 'actually correct'
+        assert call_kwargs['expert_id'] == 'chat:u1'
+
+    def test_worker_swallows_bridge_exceptions(self):
+        from routes.chatbot_routes import _submit_correction_async
+        captured = {}
+        def capture_thread(target=None, **kwargs):
+            captured['fn'] = target
+            return MagicMock()
+        with patch('threading.Thread', side_effect=capture_thread):
+            _submit_correction_async('a', 'b', 'u1')
+        with patch('integrations.agent_engine.world_model_bridge.get_world_model_bridge',
+                   side_effect=RuntimeError('bridge down')):
+            # Must NOT raise
+            captured['fn']()
+
+
 class TestLlmAutoStartDelegation:
     """Chat route owns NO model lifecycle logic. It just calls
     ModelOrchestrator.ensure_loaded_async — the single unified entry
