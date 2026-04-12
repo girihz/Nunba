@@ -110,7 +110,7 @@ const ChatMessageList = ({
   const isIdleVideo = (url) => url === idleVideoUrl;
 
   return (
-    <div className="w-full px-3 py-4 space-y-6">
+    <div className="w-full px-3 py-4 space-y-6" role="log" aria-live="polite" aria-label="Chat messages">
       {messages.map((message, index) => {
         if (message.type === 'thinking_container') {
           return (
