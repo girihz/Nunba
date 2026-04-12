@@ -430,14 +430,34 @@ def _deferred_platform_init():
             try:
                 from llama.llama_config import LlamaConfig
                 cfg = LlamaConfig()
-                # check_server_running() is cheap — avoids a redundant
-                # start when the installer or a prior run already left
-                # a healthy llama-server on the main port.
                 main_port = int(cfg.config.get('server_port', 8080))
+                # Verify the port is ACTUALLY serving a llama.cpp model
+                # by calling /v1/models. The previous check_server_running()
+                # accepted any HTTP 200 on /health, which meant a stale
+                # process or a non-llama service would cause the boot to
+                # skip, leaving the main LLM down. This was the root cause
+                # of the "Main LLM server already running — skipping" log
+                # line at 01:26:08 on 2026-04-12 despite :8080 being dead.
+                _already_running = False
                 if cfg.check_server_running(main_port):
-                    logging.info(
-                        f"Main LLM server already running on port "
-                        f"{main_port} — skipping eager boot")
+                    try:
+                        import requests as _req
+                        resp = _req.get(
+                            f'http://127.0.0.1:{main_port}/v1/models',
+                            timeout=2,
+                        )
+                        if resp.status_code == 200:
+                            models = resp.json().get('data', [])
+                            if any(m.get('id', '') for m in models):
+                                model_id = models[0].get('id', 'unknown')
+                                logging.info(
+                                    f"Main LLM server verified on port "
+                                    f"{main_port} (model={model_id}) — "
+                                    f"skipping eager boot")
+                                _already_running = True
+                    except Exception:
+                        pass
+                if _already_running:
                     return
                 ok = cfg.start_server()
                 if ok:

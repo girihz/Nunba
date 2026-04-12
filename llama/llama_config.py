@@ -704,18 +704,35 @@ class LlamaConfig:
         return best_idx
 
     def _download_mmproj_only(self, preset: ModelPreset) -> bool:
-        """Download just the vision projector (mmproj) for a model, not the model itself."""
+        """Download just the vision projector (mmproj) for a model.
+
+        Uses the same URL resolution as ``llama_installer.py:download_model``
+        (lines 991-1009) — the HF repo filename is ``preset.mmproj_source_file``
+        (e.g. ``mmproj-F16.gguf``), NOT ``preset.mmproj_file`` (which is the
+        model-specific LOCAL name like ``mmproj-Qwen3.5-0.8B-F16.gguf``).
+
+        The previous implementation was a parallel download path that used
+        ``preset.mmproj_file`` for the HF URL, which didn't exist on HuggingFace
+        (404), and also doubled the local name via a base-name injection
+        (``mmproj-Qwen3.5-0.8B-Qwen3.5-0.8B-F16.gguf``). That was the root
+        cause of T9 — the draft 0.8B started without vision because its mmproj
+        always failed to download.
+        """
         if not preset.has_vision or not preset.mmproj_file:
             return True
         try:
-            base = preset.file_name.split("-UD-")[0] if "-UD-" in preset.file_name else preset.file_name.split("-Q")[0]
-            base = base.replace('.gguf', '')
-            local_name = preset.mmproj_file.replace("mmproj-", f"mmproj-{base}-")
-            mmproj_path = self.installer.models_dir / local_name
+            mmproj_path = self.installer.models_dir / preset.mmproj_file
             if mmproj_path.exists():
                 return True
-            mmproj_url = f"https://huggingface.co/{preset.repo_id}/resolve/main/{preset.mmproj_file}"
-            logger.info(f"Downloading mmproj: {preset.mmproj_file} -> {local_name}")
+            # Also check if the installer can find it via its search paths
+            found = self.installer.get_mmproj_path(preset)
+            if found:
+                return True
+            # Download from HF — use mmproj_source_file (the actual HF filename)
+            # just like llama_installer.py:download_model does at line 997.
+            hf_name = preset.mmproj_source_file or preset.mmproj_file
+            mmproj_url = f"https://huggingface.co/{preset.repo_id}/resolve/main/{hf_name}"
+            logger.info(f"Downloading mmproj: {hf_name} -> {preset.mmproj_file}")
             self.installer.download_file_with_progress(mmproj_url, mmproj_path)
             return mmproj_path.exists()
         except Exception as e:
