@@ -3,7 +3,6 @@ import { Box, Typography, Chip, CircularProgress, Paper, Table,
   TableBody, TableCell, TableContainer, TableHead, TableRow,
   Select, MenuItem, FormControl, InputLabel, IconButton, Tooltip } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import { adminApiClient } from '../../services/adminApiClient';
 
 const STATUS_COLORS = {
   PENDING: 'default',
@@ -25,9 +24,10 @@ export default function TaskLedgerPage() {
     setLoading(true);
     try {
       const params = statusFilter ? `?status=${statusFilter}&limit=100` : '?limit=100';
-      const res = await adminApiClient.get(`/agent-engine/ledger/tasks${params}`);
-      if (res.data?.success) {
-        setTasks(res.data.tasks || []);
+      const res = await fetch(`/api/agent-engine/ledger/tasks${params}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) setTasks(data.tasks || []);
       }
     } catch (err) {
       console.warn('Ledger fetch failed:', err.message);
@@ -37,8 +37,11 @@ export default function TaskLedgerPage() {
 
   const fetchStats = useCallback(async () => {
     try {
-      const res = await adminApiClient.get('/agent-engine/ledger/stats');
-      if (res.data?.success) setStats(res.data.stats);
+      const res = await fetch('/api/agent-engine/ledger/stats');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) setStats(data.stats);
+      }
     } catch { /* ignore */ }
   }, []);
 
