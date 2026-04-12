@@ -53,6 +53,14 @@ BACKEND_PACKAGES = {
         'f5-tts',
     ],
     'piper': [],  # Bundled, no pip install needed
+    'kokoro': [
+        'kokoro',       # Main package (includes misaki phonemizer)
+        'espeakng',     # espeak-ng Python bindings (ships binary on Windows)
+    ],
+    'luxtts': [],       # CPU in-process, bundled via HARTOS
+    'pocket_tts': [
+        'pocket-tts',
+    ],
 }
 
 # pip package name → import name (for verification)
@@ -64,6 +72,9 @@ _PIP_TO_IMPORT = {
     'descript-audio-codec': 'dac',
     'descript-audiotools': 'audiotools',
     'tensorboard': 'tensorboard',
+    'kokoro': 'kokoro',
+    'espeakng': 'espeakng',
+    'pocket-tts': 'pocket_tts',
 }
 
 # Human-readable names for progress messages
