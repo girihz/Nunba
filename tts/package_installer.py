@@ -27,17 +27,23 @@ from pathlib import Path
 
 logger = logging.getLogger('NunbaTTSInstaller')
 
+# huggingface_hub 0.29+ removes is_offline_mode needed by transformers <5.x
+_HF_HUB_PIN = 'huggingface_hub>=0.27.0,<0.29.0'
+
 # Backend → pip packages needed (in install order)
 BACKEND_PACKAGES = {
     'chatterbox_turbo': [
+        _HF_HUB_PIN,
         'torchaudio',
         'chatterbox-tts',
     ],
     'chatterbox_multilingual': [
+        _HF_HUB_PIN,
         'torchaudio',
         'chatterbox-tts',
     ],
     'indic_parler': [
+        _HF_HUB_PIN,
         'torchaudio',
         'sentencepiece',
         'descript-audio-codec',
@@ -54,6 +60,7 @@ BACKEND_PACKAGES = {
     ],
     'piper': [],  # Bundled, no pip install needed
     'kokoro': [
+        _HF_HUB_PIN,
         'kokoro',       # Main package (includes misaki phonemizer)
         'espeakng',     # espeak-ng Python bindings (ships binary on Windows)
     ],
