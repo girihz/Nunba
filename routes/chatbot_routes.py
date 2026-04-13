@@ -78,11 +78,24 @@ except Exception as e:
     logger.error(f"Failed to load template.json: {e}")
     template_data = {}
 
-# Global session storage (in-memory for now - TODO: replace with persistent storage)
+# Global session storage — LRU-bounded to prevent memory leak on regional nodes.
+# SRE finding: unbounded dict grew forever per unique user_id.
 import threading
+from collections import OrderedDict
 
 _sessions_lock = threading.Lock()
-sessions = {}
+_MAX_SESSIONS = 500  # cap for regional nodes with many users
+
+class _BoundedSessionDict(OrderedDict):
+    """LRU dict that evicts oldest entries when size exceeds _MAX_SESSIONS."""
+    def __setitem__(self, key, value):
+        if key in self:
+            self.move_to_end(key)
+        super().__setitem__(key, value)
+        if len(self) > _MAX_SESSIONS:
+            self.popitem(last=False)
+
+sessions = _BoundedSessionDict()
 custom_sessions = {}
 
 # ---------------------------------------------------------------------------
