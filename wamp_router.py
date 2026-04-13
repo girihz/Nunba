@@ -117,6 +117,7 @@ class WampSession:
         self.protocol = protocol  # WebSocket protocol instance
         self.realm: Optional[str] = None
         self.authenticated: bool = False  # True after successful auth or when auth not required
+        self.authid: str = 'anonymous'    # User identity for topic authorization
 
     def send(self, msg: list):
         """Send a WAMP message (JSON-encoded list) to this client."""
@@ -150,6 +151,7 @@ def _send_welcome(session: WampSession, authid: str = 'anonymous',
                    authrole: str = 'anonymous', authmethod: str = 'anonymous'):
     """Send WELCOME message after successful auth (or when auth not required)."""
     session.authenticated = True
+    session.authid = authid
     welcome = [WELCOME, session.session_id, {
         'roles': {
             'broker': {
@@ -193,9 +195,11 @@ def _handle_hello(session: WampSession, msg: list):
                            session.session_id)
             return
 
-    # No auth required — welcome immediately
-    _send_welcome(session)
-    logger.debug("Session %d joined realm '%s'", session.session_id, realm_name)
+    # No auth required — welcome immediately with client-provided authid
+    _client_authid = details.get('authid', 'anonymous')
+    _send_welcome(session, authid=_client_authid)
+    logger.debug("Session %d joined realm '%s' as '%s'",
+                 session.session_id, realm_name, _client_authid)
 
 
 def _handle_authenticate(session: WampSession, msg: list):
@@ -225,6 +229,18 @@ def _handle_subscribe(session: WampSession, msg: list):
     if not topic:
         session.send([ERROR, SUBSCRIBE, request_id, {}, 'wamp.error.invalid_uri'])
         return
+
+    # Topic authorization: user-scoped topics (com.hertzai.hevolve.*.{userId})
+    # must match the session's authid. Prevents cross-user eavesdropping.
+    # Backend publish_local() bypasses this (no session, direct realm access).
+    if session.authid and session.authid != 'anonymous':
+        # User-scoped topics end with the user_id segment
+        if 'hertzai' in topic and session.authid not in topic:
+            session.send([ERROR, SUBSCRIBE, request_id, {},
+                          'wamp.error.not_authorized'])
+            logger.warning("Session %d (%s): subscribe to '%s' DENIED (not their topic)",
+                           session.session_id, session.authid, topic)
+            return
 
     realm = _get_realm(session.realm or 'realm1')
     sub_id = _gen_id()
