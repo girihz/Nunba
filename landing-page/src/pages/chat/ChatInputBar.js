@@ -218,7 +218,7 @@ const ChatInputBar = ({
           onFocus={handleFocus}
           onBlur={handleBlur}
           onKeyPress={handleKeyPress}
-          className="w-full text-gray-100 border bg-[#1a1a2e] text-base border-[#2a2a4a] rounded-lg px-4 py-3 resize-none focus:outline-none focus:ring-2 focus:ring-[#6C63FF] focus:shadow-[0_0_0_3px_rgba(108,99,255,0.15)] break-words overflow-wrap-anywhere whitespace-pre-wrap transition-all duration-200 placeholder-gray-400"
+          className="w-full text-black border bg-[#fff8ea] text-base border-gray-200 rounded-lg px-4 py-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:shadow-[0_0_0_3px_rgba(59,130,246,0.15)] break-words overflow-wrap-anywhere whitespace-pre-wrap transition-all duration-200"
           style={{
             minHeight: '44px',
             maxHeight: '200px',
@@ -240,7 +240,7 @@ const ChatInputBar = ({
 
         <button
           onClick={() => document.getElementById('fileInput').click()}
-          className="text-gray-400 hover:text-gray-600 p-2.5"
+          className="text-gray-400 hover:text-gray-600 p-1"
           aria-label="Upload image"
         >
           <Image className="w-5 h-5" />
@@ -248,7 +248,7 @@ const ChatInputBar = ({
 
         <button
           onClick={() => document.getElementById('pdfInput').click()}
-          className="text-gray-400 hover:text-gray-600 p-2.5"
+          className="text-gray-400 hover:text-gray-600 p-1"
           aria-label="Upload PDF"
         >
           <FileText className="w-5 h-5" />
@@ -295,7 +295,7 @@ const ChatInputBar = ({
         {/* Clipboard paste */}
         {onClipboardPaste && (
           <button onClick={onClipboardPaste}
-            className="text-gray-400 hover:text-purple-400 p-2.5 btn-press" title="Paste from clipboard"
+            className="text-gray-400 hover:text-purple-400 p-1 btn-press" title="Paste from clipboard"
             aria-label="Paste from clipboard">
             <ClipboardPaste className="w-4 h-4" />
           </button>
@@ -304,7 +304,7 @@ const ChatInputBar = ({
         {/* Camera capture */}
         {onCameraCapture && (
           <button onClick={onCameraCapture}
-            className="text-gray-400 hover:text-blue-400 p-2.5 btn-press" title="Take photo"
+            className="text-gray-400 hover:text-blue-400 p-1 btn-press" title="Take photo"
             aria-label="Take photo">
             <Camera className="w-4 h-4" />
           </button>
@@ -313,7 +313,7 @@ const ChatInputBar = ({
         {/* Memory panel */}
         {onMemoryOpen && (
           <button onClick={onMemoryOpen}
-            className="text-gray-400 hover:text-pink-400 p-2.5 btn-press" title="Memories"
+            className="text-gray-400 hover:text-pink-400 p-1 btn-press" title="Memories"
             aria-label="Open memories">
             <Brain className="w-4 h-4" />
           </button>
@@ -336,7 +336,7 @@ const ChatInputBar = ({
           disabled={!isAuthenticated}
           onClick={handleSend}
           aria-label="Send message"
-          className="p-2.5 rounded-lg transition-all duration-200 hover:scale-110 active:scale-90 motion-reduce:hover:scale-100 motion-reduce:active:scale-100"
+          className="p-1 rounded-lg transition-all duration-200 hover:scale-110 active:scale-90 motion-reduce:hover:scale-100 motion-reduce:active:scale-100"
           style={{
             background: inputMessage.trim()
               ? 'linear-gradient(135deg, #6C63FF, #9B94FF)'

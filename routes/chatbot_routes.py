@@ -2281,7 +2281,8 @@ def chat_route():
                     # TTS at Nunba layer — fires when HARTOS can't handle it:
                     # - Tier-1 down (not _hartos_backend_available)
                     # - Non-English (frozen HARTOS doesn't pass language to TTS)
-                    _nunba_handles_tts = (not _hartos_backend_available or
+                    from routes.hartos_backend_adapter import _ensure_hartos
+                    _nunba_handles_tts = (not _ensure_hartos() or
                                           (preferred_lang and not preferred_lang.startswith('en')))
                     if audio_mode and response_text and _nunba_handles_tts:
                         _fire_nunba_tts(response_text, user_id, request_id, preferred_lang)

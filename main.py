@@ -1276,6 +1276,42 @@ def admin_models_delete(model_id):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/api/admin/models/<model_id>/set-purpose', methods=["POST"])
+def admin_models_set_purpose(model_id):
+    """Toggle a purpose on/off for a model.
+
+    Body: {"purpose": "draft", "enabled": true}
+    A model can have multiple purposes (e.g. same LLM as draft + main).
+    Each purpose is globally unique — enabling it here clears it from
+    any other model regardless of type.
+    """
+    if not _is_local_request():
+        return jsonify({"error": "local only"}), 403
+    try:
+        from models.catalog import get_catalog
+        catalog = get_catalog()
+        entry = catalog.get(model_id)
+        if not entry:
+            return jsonify({"error": "not found"}), 404
+        data = request.get_json(silent=True) or {}
+        purpose = data.get('purpose')
+        if not purpose:
+            return jsonify({"error": "purpose is required"}), 400
+        enabled = data.get('enabled', True)
+        ok = catalog.set_purpose(model_id, purpose, enabled=enabled)
+        if not ok:
+            return jsonify({
+                "error": f"Invalid purpose. Valid: {catalog.ALL_PURPOSES}",
+            }), 400
+        entry = catalog.get(model_id)
+        return jsonify({
+            "success": True, "model_id": model_id,
+            "purposes": entry.purposes,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/admin/models/<model_id>/load', methods=["POST"])
 def admin_models_load(model_id):
     """Load a specific model (downloads if needed)."""
@@ -2304,7 +2340,7 @@ def _deferred_social_init():
             logging.warning(f"hart-backend migrations: {mig_err}")
         logging.info(f"hart-backend DB initialized: {NUNBA_DB_PATH}")
 
-        # Channel adapters — env-gated, each registers only if its token/URL is set
+        # Channel adapters — auto-activate from saved admin config + env vars
         try:
             from core.port_registry import get_port
             from integrations.channels.flask_integration import init_channels
@@ -2314,16 +2350,24 @@ def _deferred_social_init():
                 'default_prompt_id': 8888,
                 'device_id': DEVICE_ID,
             })
-            channels.register_telegram()    # needs TELEGRAM_BOT_TOKEN
-            channels.register_discord()     # needs DISCORD_BOT_TOKEN
-            channels.register_whatsapp()    # needs WHATSAPP_API_URL
-            channels.register_slack()       # needs SLACK_BOT_TOKEN
-            channels.register_signal()      # needs SIGNAL_PHONE_NUMBER
-            channels.register_imessage()    # needs BLUEBUBBLES_PASSWORD
-            channels.register_google_chat() # needs GOOGLE_CHAT_WEBHOOK or GOOGLE_CHAT_SA_FILE
-            channels.register_web_chat()    # always available (WebSocket)
+            # Auto-activate channels saved in admin config
+            _activated = 0
+            try:
+                from integrations.channels.admin.api import get_api
+                for _ch_type, _ch_cfg in get_api()._channels.items():
+                    if _ch_cfg.get('enabled', True):
+                        _tok = _ch_cfg.get('token') or _ch_cfg.get('api_key')
+                        if channels.register_channel(_ch_type, token=_tok):
+                            _activated += 1
+            except Exception:
+                pass
+            # Also try env-var channels not in admin config
+            for _ch_type in ('telegram', 'discord', 'whatsapp', 'slack',
+                             'signal', 'web'):
+                if _ch_type not in (channels.registry._adapters or {}):
+                    channels.register_channel(_ch_type)
             channels.start()
-            logging.info("Channel adapters initialized")
+            logging.info(f"Channel adapters initialized ({_activated} from config)")
         except Exception as ch_err:
             logging.debug(f"Channel adapters skipped: {ch_err}")
 

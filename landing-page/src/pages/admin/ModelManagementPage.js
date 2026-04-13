@@ -12,6 +12,15 @@ const DEVICE_COLORS = {
   unloaded: '#666', api: '#6C63FF',
 };
 
+// Universal — not gated by model_type. A single model (e.g. Qwen3.5-0.8B)
+// can be LLM + VLM simultaneously, serving draft + caption + grounding.
+const ALL_PURPOSES = ['draft', 'main', 'caption', 'grounding'];
+
+const PURPOSE_COLORS = {
+  draft: '#FF9800', main: '#4CAF50',
+  caption: '#00BCD4', grounding: '#E91E63',
+};
+
 function VRAMBar({ compute }) {
   if (!compute || !compute.vram_total_gb) return null;
   const used = compute.vram_total_gb - compute.vram_free_gb;
@@ -69,12 +78,14 @@ function VRAMBar({ compute }) {
   );
 }
 
-function ModelCard({ model, onLoad, onUnload, onDownload }) {
+function ModelCard({ model, onLoad, onUnload, onDownload, onSetPurpose }) {
   const isLoaded = model.loaded;
   const isDownloaded = model.downloaded;
   const typeLabel = MODEL_TYPE_LABELS[model.model_type] || model.model_type;
   const deviceColor = DEVICE_COLORS[model.device] || '#666';
   const [dlStatus, setDlStatus] = useState(null); // {status, percent, message}
+  const validPurposes = ALL_PURPOSES;
+  const activePurposes = model.purposes || [];
 
   // Poll download progress when downloading
   useEffect(() => {
@@ -126,7 +137,33 @@ function ModelCard({ model, onLoad, onUnload, onDownload }) {
           }}>
             {model.device || 'unloaded'}
           </span>
+          {activePurposes.map(p => (
+            <span key={p} style={{
+              fontSize: 11, padding: '2px 8px', borderRadius: 10,
+              background: (PURPOSE_COLORS[p] || '#6C63FF') + '22',
+              color: PURPOSE_COLORS[p] || '#6C63FF', fontWeight: 600,
+            }}>
+              {p}
+            </span>
+          ))}
         </div>
+      </div>
+
+      {/* Purpose selector — multi-toggle */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center' }}>
+        <span style={{ fontSize: 11, color: '#667' }}>Purpose:</span>
+        {validPurposes.map(p => {
+          const isOn = activePurposes.includes(p);
+          return (
+            <button key={p} onClick={() => onSetPurpose(model.id, p, !isOn)}
+              style={{
+                ...btnStyle(isOn ? (PURPOSE_COLORS[p] || '#6C63FF') : '#2a3a4a'),
+                padding: '2px 10px', fontSize: 11,
+              }}>
+              {p}
+            </button>
+          );
+        })}
       </div>
 
       {/* Specs row */}
@@ -404,6 +441,17 @@ export default function ModelManagementPage() {
     setActionInProgress(null);
   };
 
+  const handleSetPurpose = async (modelId, purpose, enabled) => {
+    try {
+      await fetch(`/api/admin/models/${modelId}/set-purpose`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ purpose, enabled }),
+      });
+      await fetchModels();
+    } catch { /* ignore */ }
+  };
+
   const handleSaveNew = async (entry) => {
     try {
       await fetch('/api/admin/models', {
@@ -479,6 +527,7 @@ export default function ModelManagementPage() {
             onLoad={(id) => doAction(id, 'load')}
             onUnload={(id) => doAction(id, 'unload')}
             onDownload={(id) => doAction(id, 'download')}
+            onSetPurpose={handleSetPurpose}
           />
         ))}
       </div>
