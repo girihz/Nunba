@@ -3293,9 +3293,13 @@ def register_routes(app):
         # Security: only serve from temp dir, no path traversal
         if '..' in filename or '/' in filename or '\\' in filename:
             abort(400)
-        # Search all TTS cache directories — each engine writes to its own cache
+        # Search all TTS output directories.
+        # HARTOS engines write to ~/.hevolve/models/<engine>/output/
+        # Nunba engines write to ~/.nunba/<engine>/cache/
+        # Glob ~/.hevolve/models/*/output/ so new engines are found automatically.
         _home = Path.home()
-        search_dirs = [
+        search_dirs = list((_home / '.hevolve' / 'models').glob('*/output'))
+        search_dirs += [
             _home / '.nunba' / 'piper' / 'cache',
             _home / '.nunba' / 'vibevoice' / 'cache',
             _home / '.nunba' / 'tts_cache' / 'presynth',
