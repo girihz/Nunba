@@ -207,7 +207,7 @@ _BACKEND_TO_REGISTRY_KEY: dict[str, str] = {
     BACKEND_COSYVOICE3:       'cosyvoice3',
     BACKEND_KOKORO:           'kokoro',
     # CPU engines — also run via HARTOS RuntimeToolManager subprocess
-    # luxtts removed — poor audio quality
+    'luxtts':                 'luxtts',  # kept for frozen HARTOS compat until rebuild
     'pocket_tts':             'pocket_tts',
 }
 

@@ -2278,8 +2278,12 @@ def chat_route():
                             args=(langchain_prompt_id, user_id, agent_name_for_post),
                             daemon=True
                         ).start()
-                    # TTS at Nunba layer — works on ALL tiers
-                    if audio_mode and response_text and not _hartos_backend_available:
+                    # TTS at Nunba layer — fires when HARTOS can't handle it:
+                    # - Tier-1 down (not _hartos_backend_available)
+                    # - Non-English (frozen HARTOS doesn't pass language to TTS)
+                    _nunba_handles_tts = (not _hartos_backend_available or
+                                          (preferred_lang and not preferred_lang.startswith('en')))
+                    if audio_mode and response_text and _nunba_handles_tts:
                         _fire_nunba_tts(response_text, user_id, request_id, preferred_lang)
                     return jsonify(response_json)
                 else:
