@@ -749,9 +749,13 @@ def _start_heartbeat_thread():
         while _started:
             wd = get_watchdog()
             if wd:
-                wd.heartbeat('wamp_router')
-            import time
-            time.sleep(30)
+                # Use sleep_with_heartbeat to avoid GIL-stall false FROZEN
+                # (SRE finding: bare time.sleep re-introduces the 2026-04-11 cascade)
+                wd.sleep_with_heartbeat('wamp_router', 30,
+                                         stop_check=lambda: not _started)
+            else:
+                import time
+                time.sleep(30)
 
     _heartbeat_thread = threading.Thread(target=_pulse, daemon=True,
                                          name='WampRouterHeartbeat')
