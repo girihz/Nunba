@@ -214,11 +214,19 @@ if getattr(sys, 'frozen', False):
     _trace(f"argv: {sys.argv}")
     _trace(f"frozen: {getattr(sys, 'frozen', False)}")
     _trace(f"executable: {sys.executable}")
+    # Disk-free via `shutil.disk_usage` — pure Python, zero subprocess.
+    # The previous implementation called `wmic logicaldisk ...` which is
+    # deprecated on Windows 11 (Microsoft removed it from default installs)
+    # and can hang INDEFINITELY (no timeout on os.popen) when the WMI
+    # service is restarting or Defender is scanning the WMI repository.
+    # Seen hangs of 27+ minutes on real-world systems — boot stuck on
+    # static splash with no progress.  shutil.disk_usage returns in <1ms.
     try:
-        _disk_info = os.popen('wmic logicaldisk where DeviceID="C:" get FreeSpace /value').read().strip()  # noqa: S605
-        _trace(f"disk free: {_disk_info}")
-    except Exception:
-        pass
+        import shutil as _shutil
+        _du = _shutil.disk_usage('C:\\')
+        _trace(f"disk free: FreeSpace={_du.free}")
+    except Exception as _de:
+        _trace(f"disk free: unavailable ({_de})")
 
     # Make _trace available globally for other modules
     import builtins as _builtins
