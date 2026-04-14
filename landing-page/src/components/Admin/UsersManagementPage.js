@@ -1,6 +1,9 @@
-import {adminApi, moderationApi} from '../../services/socialApi';
 import { useSocial } from '../../contexts/SocialContext';
+import {adminApi, moderationApi} from '../../services/socialApi';
 
+import PeopleIcon from '@mui/icons-material/People';
+import SearchIcon from '@mui/icons-material/Search';
+import VerifiedIcon from '@mui/icons-material/Verified';
 import {
   Typography,
   TextField,
@@ -27,9 +30,6 @@ import {
   Tooltip,
   IconButton,
 } from '@mui/material';
-import SearchIcon from '@mui/icons-material/Search';
-import PeopleIcon from '@mui/icons-material/People';
-import VerifiedIcon from '@mui/icons-material/Verified';
 import React, {useState, useEffect, useMemo} from 'react';
 
 // Role color mapping

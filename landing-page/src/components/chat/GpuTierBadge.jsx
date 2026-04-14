@@ -25,11 +25,13 @@
  * temporarily move the speculation line even without a reboot).
  */
 
-import React, {useEffect, useState, useMemo} from 'react';
+import {API_BASE_URL} from '../../config/apiBase';
+
 import Chip from '@mui/material/Chip';
 import Tooltip from '@mui/material/Tooltip';
 import {Zap, Gauge, Cpu, AlertTriangle} from 'lucide-react';
-import {API_BASE_URL} from '../../config/apiBase';
+import React, {useEffect, useState, useMemo} from 'react';
+
 
 const POLL_INTERVAL_MS = 60_000;
 

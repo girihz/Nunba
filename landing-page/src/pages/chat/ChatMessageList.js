@@ -1,9 +1,13 @@
 /* eslint-disable no-unused-vars, react-hooks/exhaustive-deps */
-import React, {useState, useEffect} from 'react';
-import {FileText} from 'lucide-react';
-import Lottie from 'lottie-react';
-import hourglassAnimation from '../../assets/hourglass-lottie.json';
 import TypeWriterForSubtitle from './TypeWriterSubtitle';
+
+import hourglassAnimation from '../../assets/hourglass-lottie.json';
+
+import Lottie from 'lottie-react';
+import {FileText} from 'lucide-react';
+import React, {useState, useEffect} from 'react';
+
+
 
 // Timestamp format — ported from Hevolve.ai ConversationHistoryPanel.js
 function formatTimestamp(ts) {

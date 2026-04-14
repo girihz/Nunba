@@ -1,3 +1,14 @@
+import {useReferral} from '../hooks/useReferral';
+import {apiCache} from '../services/apiCache';
+import realtimeService from '../services/realtimeService';
+import {
+  authApi,
+  notificationsApi,
+  resonanceApi,
+  onboardingApi,
+  mailerApi,
+} from '../services/socialApi';
+
 import React, {
   createContext,
   useContext,
@@ -6,16 +17,6 @@ import React, {
   useCallback,
   useMemo,
 } from 'react';
-import {
-  authApi,
-  notificationsApi,
-  resonanceApi,
-  onboardingApi,
-  mailerApi,
-} from '../services/socialApi';
-import {apiCache} from '../services/apiCache';
-import realtimeService from '../services/realtimeService';
-import {useReferral} from '../hooks/useReferral';
 
 const SocialContext = createContext();
 

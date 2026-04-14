@@ -5,6 +5,16 @@
  * Does NOT import Demopage — lightweight direct API calls only.
  */
 
+import {useSocial} from '../../../../contexts/SocialContext';
+import {useTTS} from '../../../../hooks/useTTS';
+import realtimeService from '../../../../services/realtimeService';
+import {chatApi} from '../../../../services/socialApi';
+import {
+  classifyError,
+  getBackoff,
+  makeMsgId,
+} from '../../../../utils/chatRetry';
+
 import React, {
   createContext,
   useContext,
@@ -14,15 +24,6 @@ import React, {
   useEffect,
 } from 'react';
 import {v4 as uuidv4} from 'uuid';
-import {chatApi} from '../../../../services/socialApi';
-import {useTTS} from '../../../../hooks/useTTS';
-import {useSocial} from '../../../../contexts/SocialContext';
-import realtimeService from '../../../../services/realtimeService';
-import {
-  classifyError,
-  getBackoff,
-  makeMsgId,
-} from '../../../../utils/chatRetry';
 
 const NunbaChatContext = createContext(null);
 

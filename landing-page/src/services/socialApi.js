@@ -1,3 +1,5 @@
+import {createApiClient} from './axiosFactory';
+
 import {
   SOCIAL_API_URL,
   ADMIN_API_URL,
@@ -5,7 +7,6 @@ import {
   CLOUD_API_URL,
   MAILER_BASE_URL,
 } from '../config/apiBase';
-import {createApiClient} from './axiosFactory';
 
 const socialApi = createApiClient(SOCIAL_API_URL);
 

@@ -1,5 +1,16 @@
 import {settingsApi, chatApi} from '../../services/socialApi';
 
+import ChatIcon from '@mui/icons-material/Chat';
+import CloseIcon from '@mui/icons-material/Close';
+import ImageIcon from '@mui/icons-material/Image';
+import MemoryIcon from '@mui/icons-material/Memory';
+import SaveIcon from '@mui/icons-material/Save';
+import SecurityIcon from '@mui/icons-material/Security';
+import SettingsIcon from '@mui/icons-material/Settings';
+import SmartToyIcon from '@mui/icons-material/SmartToy';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import Visibility from '@mui/icons-material/Visibility';
+import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import {
   Typography,
   Card,
@@ -16,25 +27,14 @@ import {
   Fade,
   Grow,
 } from '@mui/material';
-import SecurityIcon from '@mui/icons-material/Security';
-import ImageIcon from '@mui/icons-material/Image';
-import ChatIcon from '@mui/icons-material/Chat';
-import MemoryIcon from '@mui/icons-material/Memory';
-import SettingsIcon from '@mui/icons-material/Settings';
-import SaveIcon from '@mui/icons-material/Save';
-import CloseIcon from '@mui/icons-material/Close';
-import VisibilityIcon from '@mui/icons-material/Visibility';
-import SmartToyIcon from '@mui/icons-material/SmartToy';
-import IconButton from '@mui/material/IconButton';
-import Visibility from '@mui/icons-material/Visibility';
-import VisibilityOff from '@mui/icons-material/VisibilityOff';
-import InputAdornment from '@mui/material/InputAdornment';
 import Alert from '@mui/material/Alert';
-import Select from '@mui/material/Select';
-import MenuItem from '@mui/material/MenuItem';
-import InputLabel from '@mui/material/InputLabel';
-import FormControl from '@mui/material/FormControl';
 import Chip from '@mui/material/Chip';
+import FormControl from '@mui/material/FormControl';
+import IconButton from '@mui/material/IconButton';
+import InputAdornment from '@mui/material/InputAdornment';
+import InputLabel from '@mui/material/InputLabel';
+import MenuItem from '@mui/material/MenuItem';
+import Select from '@mui/material/Select';
 import React, {useState, useEffect} from 'react';
 
 // Card style

@@ -14,10 +14,10 @@ import MonetizationOnIcon from '@mui/icons-material/MonetizationOn';
 import PeopleIcon from '@mui/icons-material/People';
 import PersonIcon from '@mui/icons-material/Person';
 import ReportIcon from '@mui/icons-material/Report';
-import SyncIcon from '@mui/icons-material/Sync';
-import StorageIcon from '@mui/icons-material/Storage';
 import SettingsIcon from '@mui/icons-material/Settings';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
+import StorageIcon from '@mui/icons-material/Storage';
+import SyncIcon from '@mui/icons-material/Sync';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import {
   Drawer,

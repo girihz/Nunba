@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
 import { Box, Typography, LinearProgress, Fade } from '@mui/material';
+import React, { useState, useEffect, useRef } from 'react';
 
 /**
  * SetupProgressCard — dreamy progress card for long-running setup jobs

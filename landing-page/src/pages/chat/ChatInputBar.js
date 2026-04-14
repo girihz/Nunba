@@ -1,5 +1,4 @@
 /* eslint-disable no-unused-vars */
-import React from 'react';
 import {
   SendHorizontal,
   Image,
@@ -12,6 +11,7 @@ import {
   Brain,
   Ear,
 } from 'lucide-react';
+import React from 'react';
 
 /**
  * ChatInputBar -- message input area with queue, file uploads, TTS, mic, and send.
