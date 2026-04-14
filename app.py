@@ -5267,36 +5267,12 @@ def _close_splash():
 # _startup_phase is already set by the import block above (importing_main → module_ready)
 _startup_t0 = time.time()
 
-def _dump_all_thread_stacks(reason: str) -> None:
-    """Dump EVERY thread (including MainThread) with its current Python
-    stack frame — to both the logger AND the startup_trace.log so the
-    dump survives even when the main thread is blocked holding the GIL
-    and the logger's file handler can't flush in time.
-    Call from watchdog OR from an admin endpoint to diagnose a live hang.
-    """
-    import traceback as _tb
-    # Build the dump payload first (no I/O while collecting frames).
-    lines = [f"[THREAD DUMP] {reason}"]
-    frames = sys._current_frames()
-    name_by_id = {t.ident: t.name for t in threading.enumerate()}
-    main_ident = threading.main_thread().ident
-    for tid, frame in frames.items():
-        tname = name_by_id.get(tid, 'unknown')
-        marker = ' [MAIN]' if tid == main_ident else ''
-        lines.append(f"  ── Thread {tname}{marker} (id={tid}) ──")
-        lines.append('    ' + '    '.join(_tb.format_stack(frame)).rstrip())
-    payload = '\n'.join(lines)
-    # Log channel (may be delayed if main is stuck).
-    try:
-        logger.error(payload)
-    except Exception:
-        pass
-    # Trace channel (flushes immediately, survives GIL contention).
-    _t = getattr(__import__('builtins'), '_nunba_trace', lambda m: None)
-    try:
-        _t(payload)
-    except Exception:
-        pass
+# Thread-stack dump moved to `core.diag` (commit refactor: 3 parallel
+# implementations collapsed to one).  The alias is kept so any in-process
+# caller still doing `app._dump_all_thread_stacks(...)` keeps working — we
+# don't want a silent regression if a frozen bundle still references the
+# old symbol.  New code MUST use `from core.diag import dump_all_thread_stacks`.
+from core.diag import dump_all_thread_stacks as _dump_all_thread_stacks  # noqa: F401
 
 
 def _startup_watchdog():
