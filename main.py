@@ -2946,11 +2946,27 @@ def admin_diag_thread_dump():
     trace channel flushes immediately and survives GIL-held hangs).
     Returns the number of threads dumped + path to the trace file.
 
-    Guards: local-or-token gate (no remote callers); on
-    regional/central topologies a future `@require_central` wrap
-    SHOULD reject since thread stacks leak cross-tenant memory.
-    For flat (desktop) topology the local gate is sufficient.
+    Guards: local-or-token gate (no remote callers); on `central`
+    topology this endpoint is DISABLED outright (TPO finding) because
+    dumping all Python thread stacks from a multi-tenant cloud process
+    leaks cross-tenant source-line info (filename:lineno of handlers
+    currently executing other tenants' requests, plus partial locals
+    visible in frame-bound generators).  On `regional` and `flat`
+    topologies the local-or-token gate is sufficient — a single
+    operator owns the box.
+
+    Topology is read from the env var ``HEVOLVE_TOPOLOGY`` (values:
+    ``flat`` | ``regional`` | ``central``; default ``flat``) since
+    Nunba has no ``core.platform_paths.get_topology`` helper today.
     """
+    # TPO finding: on central (multi-tenant cloud) deployments, thread
+    # stacks leak cross-tenant frame-source info.  Disable outright.
+    _topology = os.environ.get('HEVOLVE_TOPOLOGY', 'flat').strip().lower()
+    if _topology == 'central':
+        return jsonify({
+            'error': 'disabled_on_central',
+            'message': 'Thread dump disabled for tenant isolation',
+        }), 403
     try:
         # _dump_all_thread_stacks is defined at module level in app.py.
         # In frozen bundled mode, it was published on __builtins__ via
