@@ -957,6 +957,12 @@ def build_windows(python_exe, app_only=False, installer_only=False):
     # to be idempotent.  Proper fix: patch it ONCE during build so the
     # runtime never touches the file.
     def _patch_transformers_at_build():
+        """Patch transformers/__init__.py atomically.  A mid-write ENOSPC
+        on `open('w')` + `f.write` leaves the file truncated/zero-byte
+        and bricks every future boot with ImportError.  Mitigation: write
+        to `.tmp` then `os.replace` (atomic on both POSIX and Win32).
+        The original bytes remain in-memory as `_src`; if replace fails
+        we restore from memory before raising."""
         _bad_line = 'import_structure[frozenset({})].update(_import_structure)'
         _fixed_line = (
             'import_structure.setdefault(frozenset({}), {})'
@@ -973,13 +979,45 @@ def build_windows(python_exe, app_only=False, installer_only=False):
             try:
                 with open(_tf_init, encoding='utf-8') as _f:
                     _src = _f.read()
-                if _bad_line in _src:
-                    with open(_tf_init, 'w', encoding='utf-8') as _f:
-                        _f.write(_src.replace(_bad_line, _fixed_line))
-                    print_info(f"Patched transformers __init__ at {_tf_init}")
+                if _bad_line not in _src:
+                    continue  # already patched or not the vulnerable line
+                _patched = _src.replace(_bad_line, _fixed_line)
+                _tmp_path = _tf_init + '.nunba-patch.tmp'
+                # Write tmp file with explicit fsync so the bytes hit
+                # disk before os.replace — crash-safety across ENOSPC.
+                try:
+                    with open(_tmp_path, 'w', encoding='utf-8') as _tf:
+                        _tf.write(_patched)
+                        _tf.flush()
+                        try:
+                            os.fsync(_tf.fileno())
+                        except OSError:
+                            pass
+                    os.replace(_tmp_path, _tf_init)
+                    # Log pre/post hashes for build reproducibility
+                    import hashlib as _hl
+                    _pre_h = _hl.sha256(_src.encode('utf-8')).hexdigest()[:12]
+                    _post_h = _hl.sha256(_patched.encode('utf-8')).hexdigest()[:12]
+                    print_info(
+                        f"Patched transformers __init__ at {_tf_init} "
+                        f"(sha256 {_pre_h} -> {_post_h})",
+                    )
                     _patched_any = True
+                except OSError as _we:
+                    # Write failed — try to clean up the tmp file.  The
+                    # original _tf_init is still untouched (os.replace
+                    # hadn't run yet), so the build remains recoverable.
+                    try:
+                        if os.path.isfile(_tmp_path):
+                            os.remove(_tmp_path)
+                    except OSError:
+                        pass
+                    print_info(
+                        f"Could not atomically patch {_tf_init}: {_we} — "
+                        "original untouched, boot will retry via runtime",
+                    )
             except OSError as _pe:
-                print_info(f"Could not patch {_tf_init}: {_pe}")
+                print_info(f"Could not read {_tf_init}: {_pe}")
         if not _patched_any:
             print_info(
                 "transformers __init__ already patched (or not found) — "

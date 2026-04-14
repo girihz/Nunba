@@ -1588,7 +1588,14 @@ def voice_transcribe():
         tmp.close()
 
         from integrations.service_tools.whisper_tool import whisper_transcribe
-        result = json.loads(whisper_transcribe(tmp.name))
+        # Pass the user's declared preferred language through to whisper so
+        # short-utterance auto-detect doesn't mis-route (e.g., a Tamil "hi"
+        # getting tagged as English — data-scientist cohort analysis caught
+        # this as divergence point #1 between the `preferred_lang` signal
+        # and the STT path).  When unset, whisper auto-detects as before.
+        _pref_lang = request.form.get('preferred_lang') or request.args.get('preferred_lang')
+        result = json.loads(whisper_transcribe(tmp.name, language=_pref_lang) if _pref_lang
+                            else whisper_transcribe(tmp.name))
 
         # Sync STT model state with catalog on first successful transcribe
         try:
