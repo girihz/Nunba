@@ -1,5 +1,17 @@
 /* eslint-disable no-unused-vars */
+import HFInstallModal from '../../components/shared/HFInstallModal';
+
 import React, {useState, useEffect, useCallback} from 'react';
+
+// Error codes emitted by /api/admin/models/hub/install that require
+// tokenized UX (see commit 7b0e312).  Anything else still falls through
+// to inline error text.
+const STRUCTURED_HF_ERROR_CODES = new Set([
+  'invalid_hf_id',
+  'unverified_org',
+  'unsafe_weights_format',
+  'hf_timeout',
+]);
 
 const MODEL_TYPE_LABELS = {
   llm: 'LLM',
@@ -886,6 +898,10 @@ function BrowseHuggingFaceTab({onInstalled}) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [installing, setInstalling] = useState(null);
+  // Structured install rejection (400/403/415/504) → modal/banner.
+  // Shape: { code, hf_id, publisher?, reason? } — see HFInstallModal.
+  const [installError, setInstallError] = useState(null);
+  const [timeoutAttempt, setTimeoutAttempt] = useState(0);
 
   const runSearch = useCallback(async () => {
     setLoading(true);
@@ -911,30 +927,116 @@ function BrowseHuggingFaceTab({onInstalled}) {
     runSearch();
   }, [runSearch]);
 
-  const install = async (m) => {
-    setInstalling(m.id);
-    try {
-      const res = await fetch('/api/admin/models/hub/install', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          hf_id: m.id,
-          category,
-          purposes: [category].filter((p) => ALL_PURPOSES.includes(p)),
-          languages: lang ? [lang] : [],
-        }),
-      });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error || 'install failed');
-      if (onInstalled) onInstalled(body.model_id);
-    } catch (e) {
-      alert(`Install failed: ${e.message || e}`);
-    }
-    setInstalling(null);
-  };
+  // Core install — accepts optional `extra` body fields (e.g.
+  // { confirm_unverified: true } after the 403 override).  Structured
+  // rejections with a known code are surfaced via installError → modal.
+  const install = useCallback(
+    async (m, extra = {}) => {
+      setInstalling(m.id);
+      try {
+        const res = await fetch('/api/admin/models/hub/install', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            hf_id: m.id,
+            category,
+            purposes: [category].filter((p) => ALL_PURPOSES.includes(p)),
+            languages: lang ? [lang] : [],
+            ...extra,
+          }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const code = body.code || body.error_code;
+          if (code && STRUCTURED_HF_ERROR_CODES.has(code)) {
+            setInstallError({
+              code,
+              hf_id: m.id,
+              publisher:
+                body.publisher ||
+                (m.id.includes('/') ? m.id.split('/')[0] : null),
+              reason: body.reason || body.message || body.error,
+            });
+            if (code !== 'hf_timeout') setTimeoutAttempt(0);
+            setInstalling(null);
+            return;
+          }
+          // Unknown error shape — still no alert(); inline error text.
+          setError(
+            `Install failed: ${body.error || body.message || res.status}`
+          );
+          setInstalling(null);
+          return;
+        }
+        // Success — clear any lingering banner state.
+        setInstallError(null);
+        setTimeoutAttempt(0);
+        if (onInstalled) onInstalled(body.model_id);
+      } catch (e) {
+        // Network-level failure (CORS, offline) — inline, not modal.
+        setError(`Install failed: ${e.message || e}`);
+      }
+      setInstalling(null);
+    },
+    [category, lang, onInstalled]
+  );
+
+  // 403 override — retry with confirm_unverified flag.
+  const handleConfirmUnverified = useCallback(
+    (hfId, extra) => {
+      setInstallError(null);
+      install({id: hfId}, extra);
+    },
+    [install]
+  );
+
+  // 415 deep-link — pre-fill search with safetensors hint, dismiss modal.
+  const handleFindSafetensors = useCallback((hfId) => {
+    const base = hfId.includes('/') ? hfId.split('/')[1] : hfId;
+    setSearch(`${base} safetensors`);
+    setInstallError(null);
+  }, []);
+
+  // 504 retry — exponential backoff owned by the banner; we just re-fire.
+  const handleRetryTimeout = useCallback(
+    (hfId, nextAttempt) => {
+      setTimeoutAttempt(nextAttempt);
+      install({id: hfId});
+    },
+    [install]
+  );
+
+  const dismissInstallError = useCallback(() => {
+    setInstallError(null);
+    setTimeoutAttempt(0);
+  }, []);
+
+  // 504 → inline banner at top of tab; all other codes → modal overlay.
+  const showTimeoutBanner =
+    installError && installError.code === 'hf_timeout';
+  const showModal =
+    installError && installError.code !== 'hf_timeout';
 
   return (
     <div>
+      {showTimeoutBanner && (
+        <HFInstallModal.TimeoutBanner
+          hfId={installError.hf_id}
+          attempt={timeoutAttempt}
+          onRetry={(next) => handleRetryTimeout(installError.hf_id, next)}
+          onDismiss={dismissInstallError}
+        />
+      )}
+      {showModal && (
+        <HFInstallModal
+          error={installError}
+          onConfirmUnverified={handleConfirmUnverified}
+          onFindSafetensors={handleFindSafetensors}
+          onRetryTimeout={handleRetryTimeout}
+          onDismiss={dismissInstallError}
+          timeoutAttempt={timeoutAttempt}
+        />
+      )}
       <div
         style={{display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12}}
       >
