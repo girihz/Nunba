@@ -54,6 +54,7 @@ import realtimeService from '../services/realtimeService';
 import {useTTS} from '../hooks/useTTS';
 
 // ── Extracted sub-components ──
+import GpuTierBadge from '../components/chat/GpuTierBadge';
 import AgentSidebar from './chat/AgentSidebar';
 import PdfViewer from './chat/PdfViewer';
 import ChatInputBar from './chat/ChatInputBar';
@@ -3895,6 +3896,12 @@ const ChatInterface = ({agentData, embeddedMode, onReady}) => {
                   : 'md:w-full'
               } overflow-x-clip overflow-y-auto pt-2 md:pt-0`}
             >
+              {/* Chat header bar — GPU tier badge surfaces the speculation-capability
+                  boundary (see components/chat/GpuTierBadge.jsx for the product-owner +
+                  accessibility rationale). Right-aligned; no layout shift when hidden. */}
+              <div className="flex justify-end items-center px-3 pt-2">
+                <GpuTierBadge />
+              </div>
               {messages.length === 0 ? (
                 <>
                   {guestNameConflict && (
