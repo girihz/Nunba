@@ -2618,6 +2618,25 @@ if not HARTOS_BACKEND_DIRECT and HARTOS_BACKEND_AVAILABLE:
     except Exception as e:
         logging.warning(f"hart-backend adapter failed: {e}")
 
+# ============== HARTOS MCP over HTTP (lifecycle-bound to Nunba) ==============
+# The HTTP MCP blueprint at /api/mcp/local replaces the standalone stdio
+# python subprocess that Claude Code would otherwise spawn (see
+# HARTOS/integrations/mcp/mcp_server.py). When Claude Code's MCP config
+# points at http://localhost:5000/api/mcp/local, the MCP lifecycle is the
+# same as Nunba's — stop Nunba → /mcp/local 404s → Claude auto-disconnects.
+# No orphan python.exe, no DB lock contention, no extra ~200MB RAM.
+try:
+    from integrations.mcp import mcp_local_bp, auto_register_local_mcp
+    app.register_blueprint(mcp_local_bp)
+    auto_register_local_mcp()
+    logging.info(
+        "HARTOS MCP mounted at /api/mcp/local — "
+        "set Claude Code mcpServers.hartos = {type:'http', "
+        "url:'http://localhost:5000/api/mcp/local'} to drop the stdio subprocess",
+    )
+except Exception as e:
+    logging.warning(f"HARTOS MCP HTTP blueprint not registered: {e}")
+
 # ============== Fleet Command Watcher (auto-restart on tier change) ==============
 def _fleet_restart_watcher():
     """Background thread: checks for HEVOLVE_RESTART_REQUESTED and triggers reload.
