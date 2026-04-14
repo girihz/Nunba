@@ -1,5 +1,5 @@
 import { useSocial } from '../../contexts/SocialContext';
-import {adminApi, moderationApi} from '../../services/socialApi';
+import {adminApi} from '../../services/socialApi';
 
 import PeopleIcon from '@mui/icons-material/People';
 import SearchIcon from '@mui/icons-material/Search';
@@ -403,7 +403,7 @@ export default function UsersManagementPage() {
   const handleBan = async (userId) => {
     setActionLoading(userId);
     try {
-      await moderationApi.ban(userId);
+      await adminApi.banUser(userId);
       setUsers((prev) =>
         prev.map((u) => (u.id === userId ? {...u, is_banned: true} : u))
       );
@@ -417,7 +417,7 @@ export default function UsersManagementPage() {
   const handleUnban = async (userId) => {
     setActionLoading(userId);
     try {
-      await moderationApi.unban(userId);
+      await adminApi.unbanUser(userId);
       setUsers((prev) =>
         prev.map((u) => (u.id === userId ? {...u, is_banned: false} : u))
       );

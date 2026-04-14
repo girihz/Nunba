@@ -107,7 +107,7 @@ export default function ModerationPage() {
   const handleReview = async (reportId, action) => {
     setActionLoading(reportId);
     try {
-      await moderationApi.reviewReport(reportId, {action});
+      await moderationApi.resolveReport(reportId, {action});
       setReports((prev) =>
         prev.map((r) => (r.id === reportId ? {...r, status: action} : r))
       );
