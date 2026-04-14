@@ -2561,13 +2561,30 @@ def _deferred_social_init():
                             _activated += 1
             except Exception:
                 pass
-            # Also try env-var channels not in admin config
-            for _ch_type in ('telegram', 'discord', 'whatsapp', 'slack',
-                             'signal', 'web'):
-                if _ch_type not in (channels.registry._adapters or {}):
-                    channels.register_channel(_ch_type)
+            # Env-var channels: ONLY register adapters that actually have
+            # credentials.  Previously we registered all 6 (telegram,
+            # discord, whatsapp, slack, signal, web) unconditionally,
+            # which imported ~250MB of heavy SDK modules even when the
+            # user had no tokens.  `web` stays unconditional because it's
+            # the local HTTP adapter — no external creds, already cheap.
+            _env_creds = {
+                'telegram': os.environ.get('TELEGRAM_BOT_TOKEN'),
+                'discord':  os.environ.get('DISCORD_BOT_TOKEN'),
+                'whatsapp': os.environ.get('WHATSAPP_ACCESS_TOKEN'),
+                'slack':    os.environ.get('SLACK_BOT_TOKEN'),
+                'signal':   os.environ.get('SIGNAL_SERVICE_URL'),
+            }
+            for _ch_type, _tok in _env_creds.items():
+                if _tok and _ch_type not in (channels.registry._adapters or {}):
+                    channels.register_channel(_ch_type, token=_tok)
+            # `web` adapter is in-process, cheap, always register
+            if 'web' not in (channels.registry._adapters or {}):
+                channels.register_channel('web')
             channels.start()
-            logging.info(f"Channel adapters initialized ({_activated} from config)")
+            logging.info(
+                f"Channel adapters initialized "
+                f"({_activated} from config, {sum(1 for t in _env_creds.values() if t)} from env, web)",
+            )
         except Exception as ch_err:
             logging.debug(f"Channel adapters skipped: {ch_err}")
 
