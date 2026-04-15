@@ -31,7 +31,12 @@ CORE_DEPS = {
     "flask-cors": "6.0.2",
     "werkzeug": "3.1.5",
     "waitress": "3.0.2",
-    # Desktop GUI
+    # Desktop GUI -- pywebview + pyautogui need a windowing system at
+    # IMPORT time (Quartz on macOS, Win32 on Windows, X11/Wayland on
+    # Linux).  Headless Linux CI runners (no DISPLAY) USED TO fail on
+    # import, blocking the python-quality matrix even though zero tests
+    # touch desktop UI.  CI now installs requirements-test.txt (minimal,
+    # no GUI deps); requirements.txt remains the production install.
     "pywebview": "6.1",
     "pyautogui": "0.9.54",
     "pyperclip": "1.11.0",
@@ -160,6 +165,36 @@ PLATFORM_DEPS = {
 }
 
 # =============================================================================
+# Test/CI Dependencies
+#
+# MINIMAL set installed by .github/workflows/quality.yml on the cross-OS
+# matrix (ubuntu + windows + macos).  Excludes:
+#   - Desktop GUI (pywebview, pyautogui — fail import on headless Linux CI
+#     runners that lack X11/Wayland; would block the entire matrix).
+#   - Heavy ML (torch, transformers, faiss, chromadb — multi-GB downloads
+#     that 10x runner cost without buying signal for ruff/pytest unit tests).
+#   - Build tooling (cx_Freeze — only the build job needs it).
+#
+# ALL pytest fixtures and unit tests must work against this minimal set.
+# If a test imports a heavy dep, mock it (see tests/conftest_cuda_mock.py
+# for the synthetic_cuda fixture pattern) or skip with a clear reason.
+# =============================================================================
+TEST_DEPS = {
+    "pytest": "8.4.2",
+    "pytest-html": "4.2.0",
+    "flask": CORE_DEPS["flask"],
+    "flask-cors": CORE_DEPS["flask-cors"],
+    "werkzeug": CORE_DEPS["werkzeug"],
+    "requests": CORE_DEPS["requests"],
+    "pydantic": CORE_DEPS["pydantic"],
+    "sqlalchemy": CORE_DEPS["sqlalchemy"],
+    "PyJWT": CORE_DEPS["PyJWT"],
+    "pyyaml": EMBED_DEPS["pyyaml"],
+    "cryptography": CORE_DEPS["cryptography"],
+}
+
+
+# =============================================================================
 # Torch install config (CPU-only for the build -- hardware-agnostic base)
 #
 # Ships CPU torch (~200MB) which works on any hardware. At runtime,
@@ -279,6 +314,34 @@ def generate_requirements(output_path='requirements.txt', platform=None):
 
     count = sum(1 for l in lines if l and not l.startswith('#'))
     print(f"Generated {output_path} ({count} deps, platform={platform})")
+    return output_path
+
+
+def generate_test_requirements(output_path='requirements-test.txt'):
+    """Generate the MINIMAL CI test requirements file.
+
+    Cross-OS-safe: no GUI deps (would fail on headless Linux runners),
+    no heavy ML (would 10x runner cost without buying signal for ruff/
+    pytest unit tests), no build tooling (only the build job needs it).
+
+    .github/workflows/quality.yml installs THIS file instead of
+    requirements.txt so the python-quality matrix succeeds on
+    ubuntu + windows + macos without provisioning X11 / CUDA.
+    """
+    lines = [
+        "# AUTO-GENERATED from scripts/deps.py -- DO NOT EDIT MANUALLY",
+        "# Regenerate: python scripts/deps.py test-requirements",
+        f"# Nunba {VERSION} — minimal CI test deps (no GUI, no heavy ML)",
+        "#",
+        "# Used by .github/workflows/quality.yml on the cross-OS matrix.",
+        "# Production install uses requirements.txt (full set).",
+        "",
+    ]
+    for name, ver in TEST_DEPS.items():
+        lines.append(_format_dep(name, ver))
+    with open(output_path, 'w') as f:
+        f.write('\n'.join(lines) + '\n')
+    print(f"Generated {output_path} ({len(TEST_DEPS)} test deps)")
     return output_path
 
 

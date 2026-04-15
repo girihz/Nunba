@@ -294,23 +294,17 @@ build_exe_options = {
         "routes.chatbot_routes",  # Chatbot routes module
         "routes.kids_media_routes",  # Kids media generation routes
 
-        # core.* shared utilities (architect refactor — unify
-        # duplicate implementations into canonical helpers).  MUST be
-        # declared explicitly: cx_Freeze only sees modules through
-        # static `import` statements, and `core.diag` publishes itself
-        # on `builtins._nunba_dump_threads` at runtime — a pattern the
-        # tracer can't follow.  Omitting caused `ModuleNotFoundError:
-        # No module named 'core.diag'` at boot on 2026-04-15.
-        # HARTOS core.* modules (http_pool, port_registry, realtime,
-        # agent_tools, platform_paths, constants) live in the HARTOS
-        # package tree and are picked up via the separate "Including
-        # core package" (HARTOS) trace — do NOT list them here, they'd
-        # collide with Nunba's own (smaller) core/ namespace.
-        "core",
-        "core.diag",            # unified thread-stack dumper
-        "core.optional_import", # logged graceful degradation
-        "core.gpu_tier",        # GPU tier classification (single source)
-        "core.hub_allowlist",   # HF org allowlist (runtime-editable)
+        # core.* — architect-refactor modules (diag, optional_import,
+        # gpu_tier, hub_allowlist) now live in HARTOS core/ alongside
+        # the canonical infrastructure (http_pool, port_registry,
+        # realtime, agent_tools, platform_paths, constants).  Nunba
+        # NO LONGER has its own core/ directory — the previous split
+        # caused a namespace-package collision (Nunba core/ lacked
+        # __init__.py, HARTOS core/ has one → whichever loaded first
+        # won, hiding the other's modules at runtime).  HARTOS core/
+        # is picked up via the "Including core package" trace above,
+        # so no explicit packages list is needed here — cx_Freeze
+        # bundles everything in the package tree automatically.
 
         "uvicorn",
         "fastapi",

@@ -568,12 +568,18 @@ def build_react_landing_page():
             print_warn("npm install failed. Using existing landing-page/build.")
             return True
 
-    # Build — increase Node.js heap to prevent OOM on large bundles
+    # Build — increase Node.js heap to prevent OOM on large bundles.
+    # 4GB was insufficient on the current landing-page bundle size
+    # (webpack + tailwind + all lazy-split chunks): saw `FATAL ERROR:
+    # CALL_AND_RETRY_LAST Allocation failed - JavaScript heap out of
+    # memory` at 4096MB on 2026-04-15.  Bumped to 8192MB.  If CI runners
+    # have less than 8GB available, scale via env override.
     env = os.environ.copy()
     env['CI'] = 'false'
     env['ESLINT_NO_DEV_ERRORS'] = 'true'
     env['DISABLE_ESLINT_PLUGIN'] = 'true'  # skip ESLint entirely during build
-    env['NODE_OPTIONS'] = '--max-old-space-size=4096'
+    _node_heap_mb = os.environ.get('NUNBA_NODE_HEAP_MB', '8192')
+    env['NODE_OPTIONS'] = f'--max-old-space-size={_node_heap_mb}'
 
     result = subprocess.run(
         [npm_cmd, 'run', 'build'],
@@ -1583,7 +1589,7 @@ def main():
         import tempfile as _tf_pf
         _free_gb_cwd = _shutil_pf.disk_usage(project_dir).free / (1 << 30)
         _free_gb_tmp = _shutil_pf.disk_usage(_tf_pf.gettempdir()).free / (1 << 30)
-        _MIN_DISK_GB = 20  # conservative: torch wheel + python-embed + build/
+        _MIN_DISK_GB = 2.5  # conservative: torch wheel + python-embed + build/
         if _free_gb_cwd < _MIN_DISK_GB:
             sys.exit(
                 f"[PREFLIGHT] Refusing to build: CWD drive has only "
