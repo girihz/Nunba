@@ -1108,10 +1108,34 @@ class TTSEngine:
 
                 ok, result = install_backend_full(backend, progress_cb=progress)
                 if ok:
-                    logger.info(f"[auto-install] '{backend}' installed successfully — "
-                                f"will be used on next TTS request")
-                    if progress:
-                        progress(f"{backend} ready!")
+                    # Verify the backend ACTUALLY runs — pip success !=
+                    # runtime success.  dac/sentencepiece/CUDA torch may
+                    # still be missing even after pip reports "installed".
+                    required_pkg = self._get_required_package(backend)
+                    if required_pkg:
+                        try:
+                            from tts._torch_probe import check_backend_runnable
+                            from tts import _torch_probe as _tp
+                            _tp._backend_cache.pop(backend, None)  # clear stale cache
+                            TTSEngine._import_check_cache.pop(required_pkg, None)
+                            actually_works = check_backend_runnable(backend, required_pkg)
+                        except Exception:
+                            actually_works = False
+                    else:
+                        actually_works = True
+
+                    if actually_works:
+                        logger.info(f"[auto-install] '{backend}' installed AND verified runnable")
+                        if progress:
+                            progress(f"{backend} ready!")
+                    else:
+                        logger.warning(f"[auto-install] '{backend}' pip succeeded but runtime "
+                                       f"probe FAILED — backend not usable. Missing deps?")
+                        if progress:
+                            progress(f"{backend} installed but not yet usable — missing runtime deps")
+                        with TTSEngine._auto_install_lock:
+                            TTSEngine._auto_install_failed.add(backend)
+                        ok = False  # so the completion event reflects failure
                 else:
                     logger.warning(f"[auto-install] '{backend}' install failed: {result}")
                     if progress:

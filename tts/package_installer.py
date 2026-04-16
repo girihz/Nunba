@@ -389,10 +389,29 @@ def install_gpu_torch(progress_cb: Callable | None = None) -> tuple[bool, str]:
     # Install GPU torch — index URL depends on GPU vendor
     _torch_index = ('https://download.pytorch.org/whl/rocm6.2' if gpu_type == 'amd'
                      else 'https://download.pytorch.org/whl/cu124')
+    _target = get_user_site_packages()
     ok, msg = _run_pip([
         'install', 'torch', 'torchaudio',
         '--index-url', _torch_index,
     ], progress_cb, timeout=900)
+
+    # Fallback: if C: is full (ENOSPC), retry to D: drive.
+    # CUDA torch is 2.5GB — C: often has <5GB free on 500GB disks
+    # that are full with system files + models.
+    if not ok and 'No space left' in msg:
+        _d_target = os.path.join('D:\\', '.nunba', 'site-packages')
+        os.makedirs(_d_target, exist_ok=True)
+        if progress_cb:
+            progress_cb("C: drive full — installing CUDA torch to D: drive...")
+        logger.info("CUDA torch: C: ENOSPC, retrying to D: drive")
+        ok, msg = _run_pip([
+            'install', 'torch', 'torchaudio',
+            '--index-url', _torch_index,
+            '--target', _d_target, '--no-deps',
+        ], progress_cb, timeout=900)
+        if ok:
+            _target = _d_target
+            logger.info("CUDA torch installed to D: drive successfully")
 
     if ok:
         # Remove the stub torch (0.0.0) from python-embed so the CUDA version

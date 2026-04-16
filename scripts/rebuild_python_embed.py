@@ -237,14 +237,21 @@ _home = os.path.expanduser("~")
 _nunba_sp = os.path.join(_home, ".nunba", "site-packages")
 _inject_path(_nunba_sp, front=True)
 
+# CUDA torch may live on D: when C: is too small (2.5GB install).
+# install_gpu_torch() falls back to D: on ENOSPC.
+_nunba_sp_d = os.path.join("D:\\\\", ".nunba", "site-packages")
+_inject_path(_nunba_sp_d, front=True)
+
 if sys.platform == "win32":
-    _torch_lib = os.path.join(_nunba_sp, "torch", "lib")
-    if os.path.isdir(_torch_lib):
-        try:
-            os.add_dll_directory(_torch_lib)
-        except (OSError, AttributeError):
-            pass
-        os.environ["PATH"] = _torch_lib + os.pathsep + os.environ.get("PATH", "")
+    for _sp in [_nunba_sp, _nunba_sp_d]:
+        _torch_lib = os.path.join(_sp, "torch", "lib")
+        if os.path.isdir(_torch_lib):
+            try:
+                os.add_dll_directory(_torch_lib)
+            except (OSError, AttributeError):
+                pass
+            os.environ["PATH"] = _torch_lib + os.pathsep + os.environ.get("PATH", "")
+            break  # first found wins
 
 # cx_Freeze lib/ — only present inside frozen Nunba build
 _self = os.path.dirname(os.path.abspath(__file__))
