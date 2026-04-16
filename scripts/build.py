@@ -711,29 +711,17 @@ def slim_python_embed():
                 shutil.rmtree(full_path, ignore_errors=True)
                 removed_mb += size
             elif d.endswith('.dist-info'):
-                # Extract package name from dist-info dir.
-                # Format: '<name>-<version>.dist-info'
-                # BUG FIX (2026-04-16): rsplit('-', 1) on 'tqdm-4.67.1.dist-info'
-                # gave 'tqdm-4.67' (split at last hyphen in version, not at
-                # name-version boundary).  Use importlib.metadata's own
-                # normalization: strip .dist-info suffix, split at first
-                # group of digits preceded by a hyphen.
-                _di_stem = d[:-len('.dist-info')]  # 'tqdm-4.67.1'
-                # Find the version separator: first '-' followed by a digit
-                _sep_idx = -1
-                for _ci, _ch in enumerate(_di_stem):
-                    if _ch == '-' and _ci + 1 < len(_di_stem) and _di_stem[_ci + 1].isdigit():
-                        _sep_idx = _ci
-                        break
-                pkg_name = _di_stem[:_sep_idx] if _sep_idx > 0 else _di_stem
-                # Normalize: try both underscore and hyphen forms
-                norm = pkg_name.replace('-', '_').lower()
-                norm_h = pkg_name.replace('_', '-').lower()
-                if norm in {k.replace('-','_').lower() for k in KEEP_DIST_INFO_FOR} or norm_h in {k.replace('_','-').lower() for k in KEEP_DIST_INFO_FOR}:
-                    continue  # keep dist-info for runtime metadata
-                size = _dir_size_mb(full_path)
-                shutil.rmtree(full_path, ignore_errors=True)
-                removed_mb += size
+                # KEEP ALL dist-info in python-embed.  Total size is ~5MB.
+                # transformers.dependency_versions_check calls
+                # importlib.metadata.version() for tqdm, filelock, regex,
+                # numpy, tokenizers, safetensors, accelerate, packaging,
+                # pyyaml at import time.  ANY missing dist-info crashes
+                # the entire parler_tts import chain.  The allowlist
+                # approach (KEEP_DIST_INFO_FOR) failed repeatedly —
+                # tqdm, filelock, and others kept getting stripped because
+                # the set couldn't keep up with transformers' dep checks.
+                # 5MB of metadata is not worth the ongoing breakage.
+                continue
 
     # Remove Scripts directory (CLI tools not needed at runtime)
     scripts_dir = os.path.join(embed_dir, 'Scripts')
