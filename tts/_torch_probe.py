@@ -32,6 +32,15 @@ def _resolve_paths():
     _usp = os.path.join(os.path.expanduser('~'), '.nunba', 'site-packages')
     _tlib = os.path.join(_usp, 'torch', 'lib')
 
+    # CUDA torch may live on a secondary drive (D:) when C: is too small
+    # for the 2.5GB torch + CUDA DLLs.  Check D:/.nunba/site-packages as
+    # fallback — mirrors sitecustomize.py's D: path injection.
+    if not os.path.isdir(_tlib):
+        _alt = os.path.join('D:\\', '.nunba', 'site-packages', 'torch', 'lib')
+        if os.path.isdir(_alt):
+            _tlib = _alt
+            _usp = os.path.join('D:\\', '.nunba', 'site-packages')
+
     if sys.platform != 'win32' or not getattr(sys, 'frozen', False):
         return False
 

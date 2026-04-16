@@ -124,6 +124,14 @@ EMBED_DEPS = {
     "numpy": "1.26.4",
     "tqdm": "4.67.1",
     "pyyaml": "6.0.2",
+    "packaging": None,  # transformers dependency_versions_check requires metadata
+    "accelerate": None, # transformers checks at import; light package (~5MB)
+    "sentencepiece": None, # transformers dependency_versions_check
+    # NOTE: descript-audio-codec (dac) is NOT here — it pulls a massive
+    # transitive tree (descript-audiotools → librosa → scipy → matplotlib).
+    # It's installed at RUNTIME by install_backend_full('indic_parler')
+    # into ~/.nunba/site-packages/ via pip.  The gpu_worker subprocess
+    # finds it there via sitecustomize.py path injection.
     # Vector DB
     "chromadb": "1.5.0",
     "faiss-cpu": "1.13.2",
@@ -297,6 +305,8 @@ _EMBED_DIR_EXCEPTIONS = {
     'sentence-transformers': 'sentence_transformers',
     'langchain-core': 'langchain_core',
     'tiktoken': 'tiktoken',
+    # descript-audio-codec → 'dac' mapping not needed in EMBED_DEPS
+    # (installed at runtime by install_backend_full, not build-time)
 }
 
 

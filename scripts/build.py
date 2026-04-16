@@ -697,6 +697,8 @@ def slim_python_embed():
         'transformers', 'torch', 'accelerate',
         'huggingface_hub', 'safetensors', 'tokenizers',
         'numpy', 'regex', 'tqdm', 'pyyaml',
+        'packaging', 'accelerate', 'sentencepiece',
+        'descript_audio_codec', 'descript-audio-codec', 'dac',
     }
 
     # Remove tests, __pycache__ always; strip .dist-info except for
@@ -709,8 +711,21 @@ def slim_python_embed():
                 shutil.rmtree(full_path, ignore_errors=True)
                 removed_mb += size
             elif d.endswith('.dist-info'):
-                # Extract package name (e.g. 'chatterbox_tts-0.1.6.dist-info' → 'chatterbox_tts')
-                pkg_name = d.rsplit('-', 1)[0] if '-' in d[:-len('.dist-info')] else d[:-len('.dist-info')]
+                # Extract package name from dist-info dir.
+                # Format: '<name>-<version>.dist-info'
+                # BUG FIX (2026-04-16): rsplit('-', 1) on 'tqdm-4.67.1.dist-info'
+                # gave 'tqdm-4.67' (split at last hyphen in version, not at
+                # name-version boundary).  Use importlib.metadata's own
+                # normalization: strip .dist-info suffix, split at first
+                # group of digits preceded by a hyphen.
+                _di_stem = d[:-len('.dist-info')]  # 'tqdm-4.67.1'
+                # Find the version separator: first '-' followed by a digit
+                _sep_idx = -1
+                for _ci, _ch in enumerate(_di_stem):
+                    if _ch == '-' and _ci + 1 < len(_di_stem) and _di_stem[_ci + 1].isdigit():
+                        _sep_idx = _ci
+                        break
+                pkg_name = _di_stem[:_sep_idx] if _sep_idx > 0 else _di_stem
                 # Normalize: try both underscore and hyphen forms
                 norm = pkg_name.replace('-', '_').lower()
                 norm_h = pkg_name.replace('_', '-').lower()

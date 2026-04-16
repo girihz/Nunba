@@ -94,9 +94,60 @@ BACKEND_DISPLAY_NAMES = {
     'piper': 'Piper TTS (CPU fallback)',
 }
 
-# Lock to prevent concurrent installs
+# Lock to prevent concurrent installs (in-process)
 _install_lock = threading.Lock()
 _installing = {}  # backend → True while installing
+
+# File-based lock to prevent concurrent pip installs ACROSS process
+# restarts.  Without this, each Nunba boot stacks another pip process
+# on top of the one still downloading from the prior boot — 3 concurrent
+# 2.5GB downloads racing for disk (observed 2026-04-16).
+_INSTALL_LOCK_DIR = os.path.join(os.path.expanduser('~'), '.nunba')
+_INSTALL_LOCK_STALE_S = 900  # 15 min — pip timeout is also 900s
+
+
+def _acquire_file_lock(name: str) -> bool:
+    """Acquire a file-based lock.  Returns True if acquired, False if
+    another process holds it (and it's not stale)."""
+    os.makedirs(_INSTALL_LOCK_DIR, exist_ok=True)
+    lock_file = os.path.join(_INSTALL_LOCK_DIR, f'.{name}.lock')
+    try:
+        if os.path.exists(lock_file):
+            age = time.time() - os.path.getmtime(lock_file)
+            if age < _INSTALL_LOCK_STALE_S:
+                # Lock is fresh — another process is installing
+                try:
+                    pid = int(open(lock_file).read().strip())
+                    # Check if the PID is still alive (Windows-specific)
+                    import subprocess as _sp
+                    _r = _sp.run(['tasklist', '/FI', f'PID eq {pid}'],
+                                 capture_output=True, text=True, timeout=5)
+                    if str(pid) in _r.stdout:
+                        logger.info(f"Install lock '{name}' held by PID {pid} (age {age:.0f}s)")
+                        return False
+                except Exception:
+                    pass  # PID check failed — treat as stale
+            # Lock is stale — remove and re-acquire
+            logger.info(f"Removing stale install lock '{name}' (age {age:.0f}s)")
+        with open(lock_file, 'w') as f:
+            f.write(str(os.getpid()))
+        return True
+    except Exception as e:
+        logger.debug(f"File lock error for '{name}': {e}")
+        return True  # Fail open — better to risk a duplicate than block forever
+
+
+def _release_file_lock(name: str):
+    """Release the file-based lock."""
+    lock_file = os.path.join(_INSTALL_LOCK_DIR, f'.{name}.lock')
+    try:
+        if os.path.exists(lock_file):
+            # Only release if we own it
+            pid = int(open(lock_file).read().strip())
+            if pid == os.getpid():
+                os.remove(lock_file)
+    except Exception:
+        pass
 
 
 def get_python_embed_dir() -> str | None:
@@ -152,15 +203,18 @@ def is_cuda_torch() -> bool:
     the real CUDA torch at ~/.nunba/site-packages/. Check the file on disk
     rather than importing (which would find the stub).
     """
-    user_torch = os.path.join(get_user_site_packages(), 'torch', 'version.py')
-    if os.path.isfile(user_torch):
-        try:
-            with open(user_torch) as f:
-                content = f.read()
-            if '+cu' in content:
-                return True
-        except Exception:
-            pass
+    # Check both C: and D: site-packages (CUDA torch may be on secondary
+    # drive when C: is too small for the 2.5GB install)
+    for _sp in [get_user_site_packages(), os.path.join('D:\\', '.nunba', 'site-packages')]:
+        user_torch = os.path.join(_sp, 'torch', 'version.py')
+        if os.path.isfile(user_torch):
+            try:
+                with open(user_torch) as f:
+                    content = f.read()
+                if '+cu' in content:
+                    return True
+            except Exception:
+                pass
     # Fallback: try import (works when not in frozen build)
     try:
         import torch
@@ -302,7 +356,11 @@ def install_gpu_torch(progress_cb: Callable | None = None) -> tuple[bool, str]:
       None   → returns False
 
     ~2.5GB download. Only runs if current torch is +cpu variant.
+    Uses a file-based lock so multiple Nunba boots don't stack
+    concurrent 2.5GB downloads.
     """
+    if not _acquire_file_lock('cuda_torch'):
+        return False, "Another process is already installing CUDA torch"
     # Central GPU detection — one source of truth
     try:
         from integrations.service_tools.vram_manager import vram_manager
@@ -403,6 +461,7 @@ def install_gpu_torch(progress_cb: Callable | None = None) -> tuple[bool, str]:
             logger.warning(f"torch reload after CUDA install failed: {e}")
             if progress_cb:
                 progress_cb("CUDA PyTorch installed — will activate on next start")
+    _release_file_lock('cuda_torch')
     return ok, msg
 
 
@@ -498,11 +557,15 @@ def install_backend_full(backend: str,
 
     This is the main entry point — called from ai_installer, /tts/setup-engine,
     and the LangChain Setup_TTS_Engine tool.
+    Uses file-based lock to prevent concurrent installs across process restarts.
     """
     global _installing
 
     if _installing.get(backend):
         return False, f"{backend} installation already in progress"
+
+    if not _acquire_file_lock(f'install_{backend}'):
+        return False, f"{backend} installation in progress (another Nunba instance)"
 
     with _install_lock:
         _installing[backend] = True
@@ -539,6 +602,7 @@ def install_backend_full(backend: str,
 
     finally:
         _installing[backend] = False
+        _release_file_lock(f'install_{backend}')
 
 
 def _is_hf_model_cached(model_id: str) -> bool:
