@@ -24,7 +24,6 @@ from pathlib import Path
 
 import pytest
 
-
 # Make scripts/ importable for these tests
 _SCRIPTS = os.path.join(os.path.dirname(__file__), '..', 'scripts')
 if _SCRIPTS not in sys.path:
@@ -169,7 +168,7 @@ def test_build_py_calls_invalidation_helpers():
     import ast
     build_py = os.path.join(os.path.dirname(__file__), '..',
                              'scripts', 'build.py')
-    with open(build_py, 'r', encoding='utf-8') as f:
+    with open(build_py, encoding='utf-8') as f:
         tree = ast.parse(f.read())
 
     names_referenced = set()

@@ -1500,7 +1500,7 @@ if getattr(args, 'acceptance_test', False):
                                os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__)),
                                'app.py')):
             if os.path.isfile(_candidate):
-                with open(_candidate, 'r', encoding='utf-8') as _af:
+                with open(_candidate, encoding='utf-8') as _af:
                     _ac_src = _af.read()
                 break
         _pre_idx = _ac_src.find('_preload_pycparser_from_lib_src()')
@@ -1516,7 +1516,7 @@ if getattr(args, 'acceptance_test', False):
 
     # Symptom #3 — VRAMManager.allocate refuses oversize claim.
     try:
-        from integrations.service_tools.vram_manager import VRAMManager, VRAM_BUDGETS
+        from integrations.service_tools.vram_manager import VRAM_BUDGETS, VRAMManager
         _vm = VRAMManager()
         VRAM_BUDGETS['_accept_test_10gb'] = (10.0, 9.0)
         try:
@@ -1538,7 +1538,8 @@ if getattr(args, 'acceptance_test', False):
     # Symptom #4 — core.verified_llm importable with expected API.
     try:
         from core.verified_llm import (
-            is_llm_inference_verified, verify_llm,
+            is_llm_inference_verified,
+            verify_llm,
         )
         _check('symptom_4_verified_llm_importable', True,
                'is_llm_inference_verified + verify_llm present')
@@ -1551,7 +1552,7 @@ if getattr(args, 'acceptance_test', False):
         _spec = _acil.find_spec('hart_intelligence_entry')
         _has_fallback = False
         if _spec and _spec.origin and os.path.isfile(_spec.origin):
-            with open(_spec.origin, 'r', encoding='utf-8') as _hf:
+            with open(_spec.origin, encoding='utf-8') as _hf:
                 _hsrc = _hf.read()
             _has_fallback = (
                 'from core.user_lang import get_preferred_lang' in _hsrc
@@ -1569,7 +1570,7 @@ if getattr(args, 'acceptance_test', False):
         _ts = _acil.find_spec('tts.package_installer')
         _has_d_fallback = False
         if _ts and _ts.origin and os.path.isfile(_ts.origin):
-            with open(_ts.origin, 'r', encoding='utf-8') as _tf:
+            with open(_ts.origin, encoding='utf-8') as _tf:
                 _tsrc = _tf.read()
             _has_d_fallback = (
                 'No space left' in _tsrc
@@ -1592,9 +1593,9 @@ if getattr(args, 'acceptance_test', False):
     # Symptom #10 — whisper_tool has circuit-breaker API.
     try:
         from integrations.service_tools.whisper_tool import (
-            get_whisper_last_error,
-            _whisper_load_breaker,
             _whisper_load_backoff,
+            _whisper_load_breaker,
+            get_whisper_last_error,
         )
         _check('symptom_10_whisper_backoff_api',
                get_whisper_last_error() is None
@@ -1616,8 +1617,8 @@ if getattr(args, 'acceptance_test', False):
     #   empty string; importlib.import_module reads the .pyc and
     #   verify_backend_synth actually drives a Piper synth.
     try:
-        import subprocess  # noqa: F401  (test_family_d asserts literal "subprocess.run(")
         import importlib
+        import subprocess  # noqa: F401  (test_family_d asserts literal "subprocess.run(")
         try:
             _vs_mod = importlib.import_module('tts.verified_synth')
             _has_verify = hasattr(_vs_mod, 'verify_backend_synth')

@@ -18,7 +18,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ══════════════════════════════════════════════════════════════════════
 # 1. should_boot_draft threshold (commit 2acf21a)
 # ══════════════════════════════════════════════════════════════════════

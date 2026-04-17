@@ -78,7 +78,7 @@ def test_b1e2e_ready_fires_only_after_verified_synth(
     engine = _PiperBackedEngine(real_piper_engine)
     cb, log = progress_log
 
-    cb(f"piper installed — testing synthesis...")
+    cb("piper installed — testing synthesis...")
     verdict = verify_backend_synth(engine, "piper", lang="en", timeout_s=30)
     if verdict.ok:
         cb(f"piper ready — {verdict.n_bytes // 1024} KB test audio produced")
@@ -193,8 +193,8 @@ def test_b8e2e_no_duplicate_inflight_install_under_contention(monkeypatch):
     contention window.
     """
     try:
-        from tts import tts_engine as _te
         from tts import package_installer as _pi
+        from tts import tts_engine as _te
     except Exception as e:
         pytest.skip(f"tts imports failed: {e}")
 

@@ -4,6 +4,7 @@ across restarts, destroying autostart-crash evidence.
 from __future__ import annotations
 
 import re
+
 import pytest
 
 pytestmark = pytest.mark.unit

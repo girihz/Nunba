@@ -6,6 +6,7 @@ Passes 8/8 from source dir, fails 5/8 from frozen bundle dir.
 from __future__ import annotations
 
 import re
+
 import pytest
 
 pytestmark = pytest.mark.unit

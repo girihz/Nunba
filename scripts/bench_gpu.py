@@ -157,7 +157,7 @@ def bench_llm_tok_per_sec(quick: bool = False) -> dict[str, Any]:
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 data = json.loads(resp.read())
-        except (urllib.error.URLError, socket.timeout, TimeoutError) as e:
+        except (urllib.error.URLError, TimeoutError) as e:
             logger.warning(f"llama-server probe failed: {e}")
             return None
         elapsed = time.perf_counter() - t0
@@ -231,7 +231,7 @@ def bench_tts_first_byte(quick: bool = False) -> dict[str, Any]:
                     result["engines"][engine] = {"status": "empty_response"}
         except urllib.error.HTTPError as e:
             result["engines"][engine] = {"status": f"http_{e.code}"}
-        except (urllib.error.URLError, socket.timeout, TimeoutError) as e:
+        except (urllib.error.URLError, TimeoutError) as e:
             result["engines"][engine] = {"status": f"unreachable: {e}"}
 
     if not any(v.get("status") == "ok" for v in result["engines"].values()):

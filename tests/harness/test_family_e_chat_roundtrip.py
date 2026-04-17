@@ -6,6 +6,7 @@ Text-in → LLM → TTS → audio-out is the integration surface.
 from __future__ import annotations
 
 import json
+
 import pytest
 
 pytestmark = pytest.mark.integration

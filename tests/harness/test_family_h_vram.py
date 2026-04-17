@@ -13,7 +13,7 @@ def test_h1_allocate_refuses_oversize():
     auto-loaded (10GB claim on 8GB GPU silently succeeded).
     """
     try:
-        from integrations.service_tools.vram_manager import VRAMManager, VRAM_BUDGETS
+        from integrations.service_tools.vram_manager import VRAM_BUDGETS, VRAMManager
     except Exception as e:
         pytest.skip(f"vram_manager not importable here: {e}")
 

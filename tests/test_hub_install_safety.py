@@ -315,6 +315,7 @@ def test_normalize_hf_id_passes_plain_ascii():
 def test_normalize_hf_id_rejects_non_ascii():
     """_normalize_hf_id raises ValueError on any non-ASCII codepoint."""
     import pytest as _pytest
+
     from main import _normalize_hf_id
     # Latin homoglyph
     with _pytest.raises(ValueError):

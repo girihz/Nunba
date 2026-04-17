@@ -1795,7 +1795,9 @@ def admin_models_hub_install():
         # blip.  Wrap in a 5s future.result(timeout=5) and fail the
         # admin request with 504 instead of stalling.
         try:
-            from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FT
+            from concurrent.futures import ThreadPoolExecutor
+            from concurrent.futures import TimeoutError as _FT
+
             from huggingface_hub import list_repo_files
             with ThreadPoolExecutor(max_workers=1) as _ex:
                 _fut = _ex.submit(list_repo_files, hf_id)
@@ -2888,7 +2890,7 @@ if not HARTOS_BACKEND_DIRECT and HARTOS_BACKEND_AVAILABLE:
 # same as Nunba's — stop Nunba → /mcp/local 404s → Claude auto-disconnects.
 # No orphan python.exe, no DB lock contention, no extra ~200MB RAM.
 try:
-    from integrations.mcp import mcp_local_bp, auto_register_local_mcp
+    from integrations.mcp import auto_register_local_mcp, mcp_local_bp
     app.register_blueprint(mcp_local_bp)
     auto_register_local_mcp()
     logging.info(
@@ -3402,6 +3404,8 @@ def start_langchain_service():
         def _report_tier_status():
             from routes.hartos_backend_adapter import (
                 _hartos_backend_available as _avail,
+            )
+            from routes.hartos_backend_adapter import (
                 _hartos_initialized as _done,
             )
             if _avail:

@@ -1080,12 +1080,12 @@ class TTSEngine:
             required_pkg = self._get_required_package(backend)
             if required_pkg:
                 try:
-                    from tts._torch_probe import check_backend_runnable
                     # Bypass the cache here — _can_run_backend may have cached
                     # False from a prior probe attempt, but we want the live
                     # answer at install-decision time (state may have changed
                     # since boot, e.g. CUDA torch finished installing).
                     from tts import _torch_probe as _tp
+                    from tts._torch_probe import check_backend_runnable
                     _tp._backend_cache.pop(backend, None)
                     if check_backend_runnable(backend, required_pkg):
                         TTSEngine._import_check_cache[required_pkg] = True

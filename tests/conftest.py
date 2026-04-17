@@ -32,7 +32,6 @@ from tests.conftest_cuda_mock import (  # noqa: E402,F401  (pytest fixture re-ex
     synthetic_cuda_oom,
 )
 
-
 # ---------------------------------------------------------------------------
 # Temp directory for config files (llama_config, etc.)
 # ---------------------------------------------------------------------------

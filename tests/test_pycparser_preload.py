@@ -31,7 +31,6 @@ import sys
 import unittest
 from pathlib import Path
 
-
 APP_PY = Path(__file__).resolve().parent.parent / "app.py"
 
 

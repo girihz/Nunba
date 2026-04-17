@@ -835,14 +835,14 @@ def build_windows(python_exe, app_only=False, installer_only=False):
     #   has a directory under site-packages and top-up any missing
     #   ones.  Survives the case where someone slimmed the snapshot
     #   manually or a prior build's slim step deleted too much.
-    from deps import compute_embed_deps_hash, missing_embed_packages, get_embed_install_list
+    from deps import compute_embed_deps_hash, get_embed_install_list, missing_embed_packages
     embed_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'python-embed')
     hash_file = embed_src + '.hash'
     current_hash = compute_embed_deps_hash()
     stored_hash = None
     if os.path.isfile(hash_file):
         try:
-            with open(hash_file, 'r', encoding='utf-8') as _hf:
+            with open(hash_file, encoding='utf-8') as _hf:
                 stored_hash = _hf.read().strip()
         except OSError:
             stored_hash = None

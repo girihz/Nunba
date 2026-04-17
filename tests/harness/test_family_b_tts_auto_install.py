@@ -6,9 +6,9 @@ tts.tts_engine._BACKEND_TO_REGISTRY_KEY). No GPU required.
 from __future__ import annotations
 
 import ast
-import pytest
 
-from conftest import TTS_AUTO_INSTALL, TTS_ALL
+import pytest
+from conftest import TTS_ALL, TTS_AUTO_INSTALL
 
 pytestmark = pytest.mark.unit
 
@@ -194,9 +194,9 @@ def test_b9_selected_backend_in_capable_set(tts_engine_reset):
     """
     try:
         from tts.tts_engine import (
-            _capable_backends_for,
-            TTSEngine,
             BACKEND_INDIC_PARLER,
+            TTSEngine,
+            _capable_backends_for,
         )
     except Exception as e:
         pytest.skip(f"tts_engine import failed: {e}")

@@ -4,7 +4,6 @@ model type (TTS + LLM + STT + VLM + audio-gen + video-gen).
 from __future__ import annotations
 
 import pytest
-
 from conftest import ALL_AUTO_INSTALL
 
 pytestmark = pytest.mark.unit

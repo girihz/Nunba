@@ -30,6 +30,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from tts.tts_engine import (  # noqa: E402
+    _LANG_CAPABLE_BACKENDS,
     BACKEND_CHATTERBOX_ML,
     BACKEND_CHATTERBOX_TURBO,
     BACKEND_COSYVOICE3,
@@ -40,7 +41,6 @@ from tts.tts_engine import (  # noqa: E402
     BACKEND_PIPER,
     TTSEngine,
     _capable_backends_for,
-    _LANG_CAPABLE_BACKENDS,
     _normalize_lang,
 )
 

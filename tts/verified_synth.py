@@ -80,7 +80,7 @@ class Result:
         return self.ok
 
 
-def _pick_test_phrase(backend: str, lang: Optional[str]) -> str:
+def _pick_test_phrase(backend: str, lang: str | None) -> str:
     """Pick a test phrase based on backend capability + requested lang.
 
     Falls back to English if the requested lang isn't in _TEST_PHRASES.
@@ -116,7 +116,7 @@ def _hf_offline_reason() -> str | None:
 
 
 def verify_backend_synth(engine, backend: str,
-                         lang: Optional[str] = None,
+                         lang: str | None = None,
                          min_bytes: int = MIN_AUDIO_BYTES,
                          timeout_s: int = 120) -> Result:
     """Run a real synthesis against `backend` and verify audio was produced.
