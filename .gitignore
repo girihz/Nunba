@@ -145,3 +145,7 @@ config.json
 *.pem
 master_private_key*
 bench/results/
+
+# Journey-suite run artifacts (regenerated each pytest run)
+tests/journey/run.log
+tests/journey/results.xml
