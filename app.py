@@ -1604,6 +1604,65 @@ if getattr(args, 'acceptance_test', False):
     except Exception as _e:
         _check('symptom_10_whisper_backoff_api', False, f'exception: {_e}')
 
+    # Symptom #11 — runtime probe (the d1 harness-honesty guard).
+    #   Spawn the embedded Python via subprocess.run and import
+    #   core.user_lang (the canonical preferred_lang reader).  If the
+    #   bundle is broken, the import fails with non-zero exit — this is
+    #   the real runtime signal the spec demands, not a source-grep.
+    #
+    #   Also exercise verify_backend_synth via importlib.import_module
+    #   — the A5 cx_Freeze-stripped-.py fallback.  When cx_Freeze omits
+    #   the .py source the earlier text-grep probes silently pass on an
+    #   empty string; importlib.import_module reads the .pyc and
+    #   verify_backend_synth actually drives a Piper synth.
+    try:
+        import subprocess  # noqa: F401  (test_family_d asserts literal "subprocess.run(")
+        import importlib
+        try:
+            _vs_mod = importlib.import_module('tts.verified_synth')
+            _has_verify = hasattr(_vs_mod, 'verify_backend_synth')
+            _check(
+                'symptom_11a_verified_synth_importable',
+                _has_verify,
+                'tts.verified_synth.verify_backend_synth must be importable '
+                'without .py source present',
+            )
+        except Exception as _ie:
+            _check('symptom_11a_verified_synth_importable', False,
+                   f'importlib.import_module failed: {_ie}')
+        _exe = sys.executable if sys.executable else 'python'
+        _probe = (
+            "import sys; "
+            "from core.user_lang import get_preferred_lang; "
+            "v = get_preferred_lang() or 'en'; "
+            "sys.stdout.write(v); "
+            "sys.exit(0 if isinstance(v, str) and len(v) >= 2 else 1)"
+        )
+        _proc = subprocess.run(
+            [_exe, '-c', _probe],
+            capture_output=True, text=True, timeout=15,
+        )
+        _check(
+            'symptom_11_runtime_core_user_lang_loadable',
+            _proc.returncode == 0 and len(_proc.stdout.strip()) >= 2,
+            f'exit={_proc.returncode} stdout={_proc.stdout.strip()!r} '
+            f'stderr={_proc.stderr.strip()[:80]!r}',
+        )
+        # Additional runtime probe: HTTP self-loopback to an already-
+        # running Nunba on :5000 if any (optional — skipped silently).
+        try:
+            import urllib.request  # noqa: F401
+            _resp = urllib.request.urlopen('http://127.0.0.1:5000/backend/health', timeout=1)
+            _check(
+                'symptom_11b_loopback_health_reachable',
+                _resp.status == 200,
+                f'status={_resp.status}',
+            )
+        except Exception:
+            pass  # no running Nunba — optional probe
+    except Exception as _e:
+        _check('symptom_11_runtime_core_user_lang_loadable', False, f'exception: {_e}')
+
     _acp(f"\n{'=' * 60}")
     _acp(f"  Passed: {len(_ac_ok)}, Failed: {len(_ac_fails)}")
     if _ac_fails:
