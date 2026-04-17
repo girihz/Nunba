@@ -157,9 +157,52 @@ if [ "${NUNBA_CYPRESS:-1}" != "0" ] && [ -d landing-page ]; then
     # for faster signal — this regression job is the consolidated view.
     # GH Actions default job timeout is 6h, so 2h budget here leaves
     # plenty of room for coverage combine + report at the end.
+    #
+    # Per-test live visibility: pipe cypress stdout through an awk that
+    # emits a `::notice::` annotation on every spec-start and test
+    # completion.  The cypress default "spec" reporter prints lines
+    # like:
+    #   Running:  chat_spec.cy.js                     (3 of 57)
+    #     ✓ loads the page (142ms)
+    #     1) fails to submit
+    # awk converts each of these into an annotation the check-run API
+    # surfaces immediately — no waiting for the tier to finish.
+    # tee cypress.log preserves the full stdout for the step log.
     echo "::notice title=cypress run::phase=starting cypress npx run (cap=7200s/120min)"
-    cd landing-page && timeout 7200 npx cypress run --browser chrome
-    _CY_RC=$?
+    cd landing-page
+    set -o pipefail
+    timeout 7200 npx cypress run --browser chrome --reporter spec 2>&1 \
+        | tee cypress.log \
+        | awk '
+            # Per-spec START — ~57 total across the suite
+            /^[[:space:]]*Running:/ {
+                name = $0
+                sub(/^[[:space:]]*Running:[[:space:]]*/, "", name)
+                print "::notice title=cypress spec::START " name
+                fflush()
+                print
+                next
+            }
+            # Per-failure — every FAIL surfaces (few per run)
+            /^[[:space:]]+[0-9]+\)/ || /^[[:space:]]*✗/ {
+                gsub(/^[[:space:]]*/, "")
+                print "::warning title=cypress test::FAIL " substr($0, 1, 160)
+                fflush()
+                print
+                next
+            }
+            # Per-spec SUMMARY line (N passing, M failing) — ~57 total
+            /passing \(/ || /failing \(/ {
+                gsub(/^[[:space:]]*/, "")
+                print "::notice title=cypress spec::SUMMARY " $0
+                fflush()
+                print
+                next
+            }
+            { print; fflush() }
+        '
+    _CY_RC=${PIPESTATUS[0]}
+    set +o pipefail
     cd "$REPO_ROOT"
     _CY_ELAPSED=$(( $(date +%s) - _CY_T0 ))
     if [ $_CY_RC -eq 124 ]; then
