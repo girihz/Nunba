@@ -210,6 +210,23 @@ function ApprovalOverlay({ data, onDismiss }) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agent_id: data.agent_id, action: data.action, decision }),
     }).catch(() => {});
+
+    // Camera consent → NunbaChatProvider listens for this event and
+    // mounts useCameraFrameStream, which opens WS to VisionService
+    // :5460 and pipes JPEG frames at ~1fps.  The server protocol is
+    // (user_id digit, 'video_start', binary frames) — not JSON.
+    const _action = String(data.action || '').toLowerCase();
+    if (_action.includes('camera') || _action.includes('video')) {
+      try {
+        window.dispatchEvent(new CustomEvent('nunba-camera-consent', {
+          detail: {
+            approved: decision === 'approve',
+            user_id: data.user_id || data.agent_id,
+          },
+        }));
+      } catch { /* CustomEvent unavailable (older WebView) */ }
+    }
+
     onDismiss();
   };
   return (

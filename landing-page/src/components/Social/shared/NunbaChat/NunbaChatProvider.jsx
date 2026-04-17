@@ -6,6 +6,7 @@
  */
 
 import {useSocial} from '../../../../contexts/SocialContext';
+import useCameraFrameStream from '../../../../hooks/useCameraFrameStream';
 import {useTTS} from '../../../../hooks/useTTS';
 import realtimeService from '../../../../services/realtimeService';
 import {chatApi} from '../../../../services/socialApi';
@@ -107,6 +108,41 @@ export default function NunbaChatProvider({children}) {
   const [currentAgent, setCurrentAgent] = useState(null); // { prompt_id, name }
   const [availableAgents, setAvailableAgents] = useState([]);
   const [ttsEnabled, setTtsEnabled] = useState(false);
+  // Camera frame streaming — consented via an ApprovalOverlay "camera"
+  // approval.  Persisted to sessionStorage so a page nav within the
+  // session keeps the consent (not localStorage — long-lived consent
+  // is a privacy anti-pattern, user should re-opt-in per session).
+  const [cameraConsented, setCameraConsented] = useState(() => {
+    try {
+      return sessionStorage.getItem('nunba_camera_consent') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    const onConsent = (ev) => {
+      const approved = !!ev?.detail?.approved;
+      setCameraConsented(approved);
+      try {
+        if (approved) {
+          sessionStorage.setItem('nunba_camera_consent', 'true');
+        } else {
+          sessionStorage.removeItem('nunba_camera_consent');
+        }
+      } catch {
+        /* storage quota */
+      }
+    };
+    window.addEventListener('nunba-camera-consent', onConsent);
+    return () => window.removeEventListener('nunba-camera-consent', onConsent);
+  }, []);
+
+  useCameraFrameStream({
+    enabled: cameraConsented && !!userId,
+    userId,
+    channel: 'camera',
+  });
 
   const conversationIdRef = useRef(uuidv4());
   const currentAgentRef = useRef(null); // race-condition guard
