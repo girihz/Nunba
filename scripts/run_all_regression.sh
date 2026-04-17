@@ -20,6 +20,11 @@ FAILED=()
 PYTHON="${PYTHON:-python}"
 PYTEST="$PYTHON -m pytest"
 
+# Belt-and-suspenders: ensure pytest-timeout is present so every test
+# has a wall-clock deadline.  A hung test is a silent failure class
+# just like every other shallow-signal bug we've been fighting.
+$PYTHON -m pip install --quiet pytest-timeout 2>/dev/null || true
+
 run_tier() {
     local name="$1"; shift
     echo ""

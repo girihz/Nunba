@@ -15,6 +15,10 @@ if "%PYTHON%"=="" set PYTHON=python
 set FAIL_COUNT=0
 set FAIL_LIST=
 
+REM Belt-and-suspenders: ensure pytest-timeout is present so every
+REM test has a wall-clock deadline (hangs → failures, not silence).
+%PYTHON% -m pip install --quiet pytest-timeout 2>nul
+
 call :run_tier "ruff check"  %PYTHON% -m ruff check .
 call :run_tier "ruff format" %PYTHON% -m ruff format --check .
 
