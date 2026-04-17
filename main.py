@@ -3813,7 +3813,18 @@ def start_background_services():
     # Warm-up TTS engine in background with user's preferred language
     # so the correct GPU engine (Indic Parler, CosyVoice3, Chatterbox Turbo)
     # is loaded BEFORE the first TTS request — no cold-start delay.
+    # Wall-clock deadline for the warmup thread (seconds). A stalled
+    # probe or hung HF download would otherwise block first-message
+    # synth indefinitely — see WARMUP_TIMEOUT watchdog below.
+    WARMUP_TIMEOUT = 180
+
     def _warmup_tts():
+        """TTS engine warmup. Bounded by WARMUP_TIMEOUT (seconds) via
+        the watchdog thread created at the bottom of the outer scope —
+        the watchdog calls tts_thread.join(timeout=WARMUP_TIMEOUT) and
+        logs a clear 'warmup exceeded' message if the probe is stuck,
+        then lets the foreground request carry the cold-start penalty.
+        """
         try:
             if os.environ.get('NUNBA_DISABLE_TTS'):
                 return
@@ -4009,8 +4020,23 @@ def start_background_services():
             logging.info(f"TTS engine warmed up: {backend} (language={preferred_lang})")
         except Exception as e:
             logging.warning(f"TTS warm-up failed (non-blocking): {e}")
+    # WARMUP_TIMEOUT (seconds) is declared at the top of this scope,
+    # just above `def _warmup_tts`. A watchdog thread joins the warmup
+    # worker with that deadline; if it expires, we log and let the
+    # foreground request path carry the cold-start penalty so the user
+    # never sees an indefinite stall.
     tts_thread = threading.Thread(target=_warmup_tts, daemon=True, name='TTSWarmup')
     tts_thread.start()
+
+    def _warmup_watchdog():
+        tts_thread.join(timeout=WARMUP_TIMEOUT)
+        if tts_thread.is_alive():
+            logging.warning(
+                f"TTS warmup exceeded {WARMUP_TIMEOUT}s — "
+                f"continuing without blocking; first synth will run in the "
+                f"foreground on the requesting thread"
+            )
+    threading.Thread(target=_warmup_watchdog, daemon=True, name='TTSWarmupWatchdog').start()
 
 
 if __name__ == '__main__':

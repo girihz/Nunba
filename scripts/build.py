@@ -684,24 +684,14 @@ def slim_python_embed():
             removed_mb += size
             print_info(f"Removed {pkg}/ ({size:.1f} MB)")
 
-    # Packages that query importlib.metadata.version() at import time.  Keep
-    # their .dist-info folders so PackageNotFoundError doesn't surface at
-    # runtime (chatterbox-tts, cosyvoice3, etc.).  Any other .dist-info is
-    # dev-only metadata and safe to strip.
-    KEEP_DIST_INFO_FOR = {
-        'chatterbox_tts', 'chatterbox-tts',
-        'cosyvoice', 'cosyvoice3',
-        'f5_tts', 'f5-tts',
-        'indic_parler_tts', 'parler_tts',
-        'kokoro', 'pocket_tts',
-        'transformers', 'torch', 'accelerate',
-        'huggingface_hub', 'safetensors', 'tokenizers',
-        'numpy', 'regex', 'tqdm', 'pyyaml',
-        'packaging', 'accelerate', 'sentencepiece',
-        'descript_audio_codec', 'descript-audio-codec', 'dac',
-    }
+    # Dead-code removal (2026-04-17): the former allowlist-based strip
+    # approach kept biting — transformers' runtime dep graph reaches
+    # filelock, tqdm, regex, and others that the allowlist repeatedly
+    # missed.  Policy now: keep ALL .dist-info (~5 MB total, negligible
+    # vs installer size).  The dist-info branch in the walker below is
+    # a no-op `continue`; the whole set is gone.
 
-    # Remove tests, __pycache__ always; strip .dist-info except for
+    # Remove tests, __pycache__ always; dist-info is kept (not stripped) per
     # runtime-metadata consumers.
     for root, dirs, files in os.walk(site_packages, topdown=False):
         for d in list(dirs):
@@ -716,10 +706,10 @@ def slim_python_embed():
                 # importlib.metadata.version() for tqdm, filelock, regex,
                 # numpy, tokenizers, safetensors, accelerate, packaging,
                 # pyyaml at import time.  ANY missing dist-info crashes
-                # the entire parler_tts import chain.  The allowlist
-                # approach (KEEP_DIST_INFO_FOR) failed repeatedly —
-                # tqdm, filelock, and others kept getting stripped because
-                # the set couldn't keep up with transformers' dep checks.
+                # the entire parler_tts import chain.  An earlier
+                # allowlist approach failed repeatedly — tqdm, filelock,
+                # and others kept getting stripped because the set
+                # couldn't keep up with transformers' dep checks.
                 # 5MB of metadata is not worth the ongoing breakage.
                 continue
 
