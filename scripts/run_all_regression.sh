@@ -75,10 +75,57 @@ if [ "${NUNBA_LIVE:-0}" = "1" ]; then
         -v --tb=short --rootdir tests/harness
 fi
 
-# ── 5. Optional: Cypress
-if [ "${NUNBA_CYPRESS:-0}" = "1" ] && [ -d landing-page ]; then
-    run_tier "cypress e2e" \
-        bash -c "cd landing-page && npx cypress run --browser chrome"
+# ── 5. Cypress — ALWAYS RUN (unless explicitly disabled).  This drives
+#      hundreds of real backend routes via the React UI; without it the
+#      Python coverage number is a huge under-count.  Flask runs under
+#      coverage.py parallel mode via scripts/coverage_flask_run.py so
+#      every handler Cypress hits is recorded.
+if [ "${NUNBA_CYPRESS:-1}" != "0" ] && [ -d landing-page ]; then
+    echo ""
+    echo "════════════════════════════════════════════════════════════"
+    echo "  Cypress E2E (Flask under coverage, React driven by Chrome)"
+    echo "════════════════════════════════════════════════════════════"
+
+    # Boot Flask under coverage.py.  Parallel mode → .coverage.* fragment.
+    $PYTHON scripts/coverage_flask_run.py --port 5000 &
+    _FLASK_PID=$!
+
+    # Wait for Flask to start listening.
+    for _ in $(seq 1 60); do
+        if curl -s -o /dev/null -m 1 http://127.0.0.1:5000/health; then
+            break
+        fi
+        sleep 1
+    done
+
+    # Boot the React dev server if no prod build is serving at :3000.
+    _REACT_PID=""
+    if [ ! -d landing-page/build ]; then
+        (cd landing-page && BROWSER=none PORT=3000 npm start &)
+        _REACT_PID=$!
+        for _ in $(seq 1 60); do
+            if curl -s -o /dev/null -m 1 http://127.0.0.1:3000; then
+                break
+            fi
+            sleep 1
+        done
+    fi
+
+    # Drive the browser suite.
+    cd landing-page && npx cypress run --browser chrome
+    _CY_RC=$?
+    cd "$REPO_ROOT"
+
+    # Graceful shutdown so coverage atexit fires.
+    kill -TERM $_FLASK_PID 2>/dev/null || true
+    wait $_FLASK_PID 2>/dev/null || true
+    if [ -n "$_REACT_PID" ]; then
+        kill -TERM $_REACT_PID 2>/dev/null || true
+    fi
+
+    if [ $_CY_RC -ne 0 ]; then
+        FAILED+=("cypress e2e (exit $_CY_RC)")
+    fi
 fi
 
 # ── 6. Optional: staging probes
