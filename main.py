@@ -2176,9 +2176,69 @@ def admin_models_hub_install():
         def _bg():
             try:
                 get_orchestrator().download(safe_id)
+                # ── Runtime validation probe ────────────────────────
+                # Until this point the install is merely "bytes landed
+                # on disk".  Actually load() the model so we can prove
+                # it works *before* a real user-facing request depends
+                # on it.  Success flips capabilities['install_validated']
+                # so the dispatcher capability gate will start routing
+                # to it.  Failure leaves install_validated=False and
+                # records the reason — the model stays in the catalog
+                # but dispatch refuses it.
+                validated = False
+                validate_reason = ''
+                try:
+                    _entry = get_orchestrator().load(safe_id)
+                    if _entry is not None:
+                        validated = True
+                        try:
+                            from models.catalog import get_catalog as _get_cat
+                            _e = _get_cat().get(safe_id)
+                            if _e is not None:
+                                _e.capabilities['install_validated'] = True
+                        except Exception as _ce:
+                            logging.debug(
+                                f"[hub-install] capability flip skipped: {_ce}")
+                    else:
+                        validate_reason = 'loader returned None'
+                except Exception as _le:
+                    validate_reason = str(_le)
+                    logging.info(
+                        f"[hub-install] runtime validation failed "
+                        f"for {safe_id}: {_le}")
+
+                # ── Optional hive benchmark challenge ───────────────
+                # If the HiveBenchmarkProver knows a baseline for this
+                # model family, fire a CHALLENGE run in the background.
+                # The prover compares hive output against KNOWN_BASELINES
+                # and publishes results on 'hive.benchmark.challenge'.
+                # Best-effort, non-blocking — most HF models won't have
+                # a baseline and that's fine (the install is still
+                # validated by the load probe above).
+                if validated:
+                    try:
+                        from integrations.agent_engine.hive_benchmark_prover \
+                            import get_benchmark_prover, KNOWN_BASELINES
+                        _baselines = KNOWN_BASELINES.get(safe_id) or {}
+                        if _baselines:
+                            _bench = next(iter(_baselines.keys()))
+                            _p = get_benchmark_prover()
+                            threading.Thread(
+                                target=lambda: _p.challenge(safe_id, _bench),
+                                name=f'hub-challenge-{safe_id}',
+                                daemon=True,
+                            ).start()
+                    except Exception as _pe:
+                        logging.debug(
+                            f"[hub-install] prover challenge skipped: {_pe}")
+
                 _download_progress[safe_id] = {
                     'status': 'complete', 'percent': 100,
-                    'message': 'Downloaded', 'started_at': _download_progress[safe_id]['started_at'],
+                    'message': 'Downloaded + validated' if validated
+                               else f'Downloaded (unvalidated: {validate_reason})',
+                    'validated': validated,
+                    'validate_reason': validate_reason,
+                    'started_at': _download_progress[safe_id]['started_at'],
                 }
             except Exception as e:
                 _download_progress[safe_id] = {
