@@ -120,39 +120,76 @@ def test_j201_device_id_file_under_data_dir():
 
 
 @pytest.mark.timeout(15)
-def test_j201_guest_id_json_future_spec():
-    """DOCUMENT-ONLY: A future `guest_id.json` file under
-    `~/Documents/Nunba/data/` — derived deterministically from
-    device_id — would close the WebView2-UserData-wipe gap.
-    Today the guest_user_id lives in WebView2 localStorage, which
-    MAY be wiped by aggressive uninstallers.
+def test_j201_guest_id_json_under_data_dir():
+    """J201 green path: `guest_id.json` MUST live under
+    `get_data_dir()` — NOT inside WebView2's UserDataFolder (which
+    is wiped by uninstall) and NOT under Program Files (which is
+    read-only for non-admin users).
 
-    Contract the future fix must honor:
-      - Path: under get_data_dir() (NOT Program Files)
-      - Shape: {"guest_id": "<stable hex, >=16 chars>"}
-      - Derivation: pure function of the hardware device_id
+    On this install, desktop/guest_identity.py writes the file at
+    module-import time via get_guest_id().  We call the helper
+    directly (no live HTTP) so the test is self-contained and
+    doesn't depend on the Flask boot having already happened.
     """
-    home = Path.home()
-    data_dir_candidates = [
-        home / "Documents" / "Nunba" / "data",
-        Path(os.environ.get("NUNBA_DATA_DIR", "")),
-    ]
-    data_dirs = [d for d in data_dir_candidates if d and d.exists()]
-    if not data_dirs:
-        pytest.skip("No data dir found — live Nunba may not have booted fully")
-    gid_file = None
-    for d in data_dirs:
-        f = d / "guest_id.json"
-        if f.exists():
-            gid_file = f
-            break
-    if not gid_file:
-        pytest.xfail(
-            "guest_id.json not yet implemented.  Future work: "
-            "write it at first guest-register, derive from "
-            "device_id, persist under get_data_dir()."
-        )
+    from desktop.guest_identity import (
+        get_guest_id,
+        get_guest_id_file_path,
+    )
+
+    guest_id = get_guest_id()
+    gid_path = Path(get_guest_id_file_path())
+
+    # MUST be a user-writable path — never under Program Files.
+    assert "Program Files" not in str(gid_path), (
+        f"guest_id.json at {gid_path} is under Program Files — "
+        f"reinstall would wipe it, breaking guest restore."
+    )
+
+    # File MUST exist after get_guest_id() has run.
+    assert gid_path.exists(), (
+        f"get_guest_id() returned {guest_id!r} but {gid_path} was not "
+        f"written — persistence is broken."
+    )
+
     import json as _json
-    data = _json.loads(gid_file.read_text(encoding="utf-8"))
+    data = _json.loads(gid_path.read_text(encoding="utf-8"))
     assert "guest_id" in data, "guest_id.json missing 'guest_id' key"
-    assert isinstance(data["guest_id"], str) and len(data["guest_id"]) >= 16
+    assert isinstance(data["guest_id"], str)
+    # Shape: "g_" + 16 hex = 18 chars
+    assert data["guest_id"].startswith("g_"), (
+        f"guest_id must be prefixed 'g_' (not a real UUID), got "
+        f"{data['guest_id']!r}"
+    )
+    assert len(data["guest_id"]) == 18, (
+        f"guest_id must be 'g_' + 16 hex chars (18 total), got "
+        f"length {len(data['guest_id'])}: {data['guest_id']!r}"
+    )
+    # derivation_source recorded for ops diagnostic
+    assert data.get("derivation_source"), (
+        "guest_id.json missing 'derivation_source' — ops can't tell "
+        "if we hit the fallback path"
+    )
+
+
+@pytest.mark.timeout(15)
+def test_j201_live_api_guest_id_returns_same_id(live_nunba):
+    """End-to-end: GET /api/guest-id returns the SAME "g_<16 hex>"
+    id as the on-disk guest_id.json.  This is the invariant the
+    React fallback chain depends on (window.__NUNBA_GUEST_ID__
+    matches what desktop/guest_identity.py persisted).
+    """
+    r = live_nunba.get("/api/guest-id")
+    if r.status_code == 404:
+        pytest.skip("guest-id endpoint not mounted in this build")
+    if r.status_code == 503:
+        pytest.skip("guest-id derivation unavailable on this host")
+    assert r.status_code == 200
+    body = r.get_json() or {}
+    api_id = body.get("guest_id")
+    assert api_id, "guest_id missing from response"
+    # Cross-check against on-disk value
+    from desktop.guest_identity import get_guest_id
+    assert api_id == get_guest_id(), (
+        "API and on-disk guest_id disagree — two sources of truth, "
+        "which would break storage-key derivation on the frontend"
+    )
