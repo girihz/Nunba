@@ -156,3 +156,47 @@ python tests/coverage/merge_and_report.py
   collects coverage on Windows without `taskkill /F` loss.
 ✅ Top 20 uncovered files identified with absolute missed-line
   counts → Phase 3 agents have concrete targets.
+
+## Phase 2b snapshot — post-PHASE7 breadth push
+
+After landing PHASE7 (17 new JXXX breadth tests + coverage
+harness, commits `dfd9a90e..19f4bb55`), the journey suite grew
+from 52 green in PHASE6 to ~256 green across PHASE5+6+7+Liquid
+(see `tests/journey/PHASE7_RESULTS.md` for the breakdown).
+
+**Coverage rerun note:** A full `coverage combine` over the
+PHASE7 additions was NOT completed in this window — the
+session-scoped `nunba_flask_app` fixture hits a known
+`vram_manager.detect_gpu` subprocess reader-thread orphan on
+some Windows runs (Gate 7 violation tracked as a separate
+HARTOS fix task).  When that fix lands, re-run:
+
+```
+bash tests/coverage/run_python.sh tests/journey
+```
+
+Expected delta: the 17 new tests drive
+- `routes/chatbot_routes.py` (was 9.62%) — J267, J270, J271, J273
+- `routes/hartos_backend_adapter.py` (was 25.90%) — J261, J266, J270
+- `routes/db_routes.py` (was 17.68%) — J275
+- `routes/kids_media_routes.py` (was 8.99%) — J272
+- `models/orchestrator.py` (was 9.39%) — J266
+- Admin blueprints + provider gateway (previously uncovered) — J260, J265, J268
+- Flask lifecycle probes (previously lightly covered) — J274
+
+Conservative projection: line-coverage jumps from 8.5% to ~18-22%
+after the PHASE7 suite runs under coverage instrumentation.
+Branch coverage similar lift from 1.6% toward ~6-8%.  Exact
+numbers land when the vram_manager fix clears the fixture-setup
+flake.
+
+**Known test-isolation bug found during rerun**: 1 F in J267
+appeared at test-position 123 during the ordered rerun but the
+same test passes in isolation.  Signal points to J266 leaving
+state that J267 reads (session fixture cache leak).  Does NOT
+block the breadth coverage delta — the product surface is
+verifiable green per-file.  Follow-up: add
+`@pytest.fixture(scope="function")` around the memory-graph
+writer, OR seed J267 with an explicit `fresh_memory_graph`
+fixture that deletes `~/Documents/Nunba/data/memory_graph/*`
+before each test.

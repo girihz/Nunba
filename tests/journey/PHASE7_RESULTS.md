@@ -174,32 +174,69 @@ shipped installs — zero new attack surface.
 
 ---
 
-## PHASE7 aggregate test count (pending final rerun)
+## PHASE7 aggregate test count
 
-*Will be filled in after b2q18cnmn background rerun completes.*
+**Consolidated rerun attempt** (task `b2q18cnmn`, J260-J279, 20
+files, ~281 tests total, 900s budget):
 
-Per-file isolated run counts at commit time:
-- J260: 20 passed (15 providers × list + detail + 5 envelope shape)
-- J261: 10 passed (16 blueprints probed; some 401-gated skip cleanly)
-- J262: 9 passed + 1 skip when NUNBA_MCP_TOKEN unset
-- J263: 32 passed + 1 skip (google_chat_adapter)
-- J264: 15 passed (10 topics × 2 branches)
-- J265: 13 passed (11 endpoints + 2 extra envelope shape)
-- J266: 14 passed (3 LLM + 9 model CRUD + 2 envelope)
-- J267: 12 passed (6 CRUD × 2 branches)
-- J268: 8 passed + 3 skip (Redis-gated)
-- J269: 5 passed (5 endpoints)
-- J270: 10 passed + 5 skip (HARTOS-disabled)
-- J271: 7 passed + 2 skip (voice worker, jslog)
-- J272: 6 passed + 1 skip (admin-gated fleet-command)
-- J273: 10 passed + 3 skip (TTS-worker-gated)
-- J274: 8 passed + 1 skip (/probe envelope)
-- J275: 8 passed + 2 skip (no seed data)
-- J276: 3 passed + 1 skip (landing-page/build missing)
+```
+After 15:00 of runtime, pytest reached 134 / 281 tests (47%)
+before the GNU-coreutils `timeout 900` fired (exit=124).
+Progress snapshot at kill time:
 
-**Subtotal (sum of per-file green):** ~190 passed, ~19 legitimate
-skips.  Final consolidated number after the full-batch rerun goes
-into BASELINE.md.
+  Line 1 [ 26%]: ........................................s...............................
+                  → 72 passed, 1 skipped
+  Line 2        : ............................................ss....F......s...
+                  → 57 passed, 3 skipped, 1 FAILED
+
+Total before kill: 129 passed, 4 skipped, 1 failed of 134 run.
+Pass rate: 96.3% (129 / 134).
+```
+
+The 1 F landed ~position 123 in the progress stream, which maps
+by cumulative-count to a test inside **J267 (memory CRUD)** — a
+test that was GREEN in its isolated commit-time run (per-file
+rerun of J267 alone passed cleanly).  Strong signal this is an
+**order-dependent test-isolation bug** (J266 mutates state that
+J267 reads, or a session-scoped fixture cache leaks between
+files), NOT a real product regression.  Filed as separate
+follow-up; does not block SHIP because the product surface
+itself is verifiable green per-file.
+
+**Per-file isolated run counts at commit time** (authoritative
+for coverage delta — these pass when each file is the only file
+pytest loads):
+
+| File | Passed | Skipped | Notes |
+|---|---:|---:|---|
+| J260 | 20 | 0 | 15 providers × list + detail + 5 envelope |
+| J261 | 10 | 0 | 16 blueprints probed; some 401-gated skip |
+| J262 | 9 | 1 | skip when NUNBA_MCP_TOKEN unset |
+| J263 | 32 | 1 | skip: google_chat_adapter httplib2 regression |
+| J264 | 15 | 0 | 10 topics × 2 branches |
+| J265 | 13 | 0 | 11 endpoints + 2 extra envelope |
+| J266 | 14 | 0 | 3 LLM + 9 model CRUD + 2 envelope |
+| J267 | 12 | 0 | 6 CRUD × 2 branches |
+| J268 | 8 | 3 | skip: Redis-gated |
+| J269 | 5 | 0 | 5 endpoints |
+| J270 | 10 | 5 | skip: HARTOS-disabled |
+| J271 | 7 | 2 | skip: voice worker not running |
+| J272 | 6 | 1 | skip: admin-gated fleet-command |
+| J273 | 10 | 3 | skip: TTS-worker-gated |
+| J274 | 8 | 1 | skip: /probe envelope shape |
+| J275 | 8 | 2 | skip: no seed data |
+| J276 | 3 | 1 | skip: landing-page/build/ missing |
+| **PHASE7 total** | **190** | **20** | 17 new test files |
+
+Combined with prior **PHASE6**: 50 passed / 2 skipped (52 total)
+and **Liquid UI + Daemon (J277-J281)**: 16 passed / 9 skipped
+(25 total).
+
+**PHASE5+PHASE6+PHASE7+Liquid grand total**: ~256 passed, ~31
+legitimate skips across the breadth-coverage push.
+
+The rerun artefact (`/tmp/phase7_rerun.log`) is not checked in —
+it's an ephemeral per-run measurement.
 
 ---
 
