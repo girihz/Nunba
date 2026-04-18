@@ -65,8 +65,15 @@ class HevolveDemo extends Component {
 
   /** Send message to the local Flask /chat endpoint (agent pipeline) */
   sendToLocalAgent(msgText) {
+    // Fallback chain aligned with NunbaChatProvider's storage-key
+    // scoping — a truly-fresh guest should send user_id='guest', not
+    // the literal '1' (which collapses every new install to the same
+    // per-user bucket on the backend).  See J204 regression guard.
     const userId =
-      this.props.userId || localStorage.getItem('hevolve_access_id') || '1';
+      this.props.userId ||
+      localStorage.getItem('hevolve_access_id') ||
+      localStorage.getItem('guest_user_id') ||
+      'guest';
     const promptId = this.props.promptId || 0;
 
     const payload = {

@@ -121,8 +121,16 @@ function saveMessages(userId, agentId, msgs) {
 
 export default function NunbaChatProvider({children}) {
   const {currentUser} = useSocial();
+  // Fallback chain — aligned with STORAGE_KEY's own `|| 'guest'`
+  // fallback above.  Regression history: the prior `|| '1'` default
+  // made every fresh guest (no currentUser, no hevolve_access_id)
+  // collapse to bucket `nunba_chat_1_default`, bleeding conversations
+  // across distinct device/guest pairs.  See J204 regression test.
   const userId =
-    currentUser?.id || localStorage.getItem('hevolve_access_id') || '1';
+    currentUser?.id ||
+    localStorage.getItem('hevolve_access_id') ||
+    localStorage.getItem('guest_user_id') ||
+    'guest';
 
   // Core state
   const [isExpanded, setIsExpanded] = useState(false);
