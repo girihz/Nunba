@@ -287,6 +287,22 @@ export default function NunbaChatProvider({children}) {
   const currentAgentRef = useRef(null); // race-condition guard
   const latestRequestIdRef = useRef(null); // stale-audio guard (Android parity)
 
+  // Admin-controlled restore policy (J207). Defaults match backend
+  // defaults so the very first paint (before fetch resolves) renders
+  // restored history just like the prior behaviour — no perceived
+  // regression for users who never visit /admin/config/chat.
+  // restorePolicy ∈ ('always','prompt','never','session')
+  // restoreScope  ∈ ('all_agents','active_only','manual')
+  const [restorePolicy, setRestorePolicy] = useState('always');
+  const [restoreScope, setRestoreScope] = useState('all_agents');
+  const [restoreSettingsLoaded, setRestoreSettingsLoaded] = useState(false);
+  // restorePromptVisible drives the one-tap "Restore your last chat?"
+  // banner shown when restore_policy === 'prompt'. Once the user picks
+  // Yes / No we set restorePromptDecided=true so the banner stays gone
+  // for the rest of the session.
+  const [restorePromptVisible, setRestorePromptVisible] = useState(false);
+  const [restorePromptDecided, setRestorePromptDecided] = useState(false);
+
   // TTS — wired to existing hook
   const tts = useTTS({enabled: ttsEnabled, autoSpeak: false});
 
@@ -333,6 +349,49 @@ export default function NunbaChatProvider({children}) {
     }
   }, []);
 
+  // Fetch admin-controlled restore policy on mount (J207).
+  // Backend GET /api/admin/config/chat returns
+  //   { restore_policy, restore_scope, cloud_sync_enabled, fallback? }
+  // Network failure → keep the 'always/all_agents' defaults so the
+  // user still gets the prior restore behaviour (graceful degradation).
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/admin/config/chat', {credentials: 'same-origin'})
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (cancelled || !j) return;
+        if (j.restore_policy) setRestorePolicy(j.restore_policy);
+        if (j.restore_scope) setRestoreScope(j.restore_scope);
+        setRestoreSettingsLoaded(true);
+      })
+      .catch(() => {
+        // Backend down → still mark as loaded so the gating useEffect
+        // proceeds with defaults rather than blocking forever.
+        if (!cancelled) setRestoreSettingsLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // restore_policy === 'session' → clear localStorage on tab close so
+  // the next boot starts fresh. We use the storage 'beforeunload' hook
+  // because the React unmount only fires on SPA route changes, not on
+  // process exit.
+  useEffect(() => {
+    if (restorePolicy !== 'session') return undefined;
+    const handler = () => {
+      try {
+        const agentKey = currentAgent?.prompt_id || 'default';
+        localStorage.removeItem(STORAGE_KEY(userId, agentKey));
+      } catch {
+        /* quota / read-only storage */
+      }
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [restorePolicy, userId, currentAgent]);
+
   // Listen for external agent selection (e.g., "Chat with HART" buttons)
   useEffect(() => {
     const handler = (e) => {
@@ -357,12 +416,109 @@ export default function NunbaChatProvider({children}) {
   // Scope: (userId, agentKey) — guest and logged-in share the webview
   // localStorage but get separate buckets so a user logging in mid-session
   // doesn't inherit the prior guest's messages (and vice versa).
+  //
+  // Admin-controlled restore policy (J207) gates the load:
+  //   'always'  → load history immediately (legacy behaviour)
+  //   'prompt'  → start blank, set restorePromptVisible so the UI can
+  //               show a one-tap "Restore your last chat?" banner;
+  //               on Yes the banner handler calls loadMessages directly
+  //   'never'   → never load; bucket remains on disk for bleed-prevention
+  //               but stays unrendered
+  //   'session' → load (within a boot cycle) — the beforeunload hook
+  //               above clears the bucket on shutdown
+  // Scope:
+  //   'all_agents'  → standard per-bucket behaviour (each agent has its
+  //                   own history; switching loads it)
+  //   'active_only' → ONLY the currently-selected agent restores; other
+  //                   agents start fresh (we accomplish this by clearing
+  //                   non-current buckets — see effect below)
+  //   'manual'      → suppress auto-load even on 'always'; user picks
+  //                   via the same one-tap banner pattern
   useEffect(() => {
     const agentKey = currentAgent?.prompt_id || 'default';
-    setMessages(loadMessages(userId, agentKey));
     conversationIdRef.current = uuidv4();
     currentAgentRef.current = agentKey;
+
+    // Wait for settings to load before deciding (otherwise we'd render
+    // history then immediately wipe it, which is jarring).
+    if (!restoreSettingsLoaded) {
+      setMessages([]);
+      return;
+    }
+
+    const shouldAutoLoad =
+      (restorePolicy === 'always' || restorePolicy === 'session') &&
+      restoreScope !== 'manual';
+
+    const shouldShowPrompt =
+      restorePolicy === 'prompt' || restoreScope === 'manual';
+
+    if (shouldAutoLoad) {
+      setMessages(loadMessages(userId, agentKey));
+      setRestorePromptVisible(false);
+    } else if (shouldShowPrompt && !restorePromptDecided) {
+      setMessages([]);
+      // Only show the banner if there IS prior history to restore —
+      // no point asking when the bucket is empty.
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY(userId, agentKey));
+        const hasHistory = !!(raw && JSON.parse(raw).length > 0);
+        setRestorePromptVisible(hasHistory);
+      } catch {
+        setRestorePromptVisible(false);
+      }
+    } else {
+      // policy === 'never' OR (prompt|manual) already-decided
+      setMessages([]);
+      setRestorePromptVisible(false);
+    }
+  }, [
+    currentAgent,
+    userId,
+    restorePolicy,
+    restoreScope,
+    restoreSettingsLoaded,
+    restorePromptDecided,
+  ]);
+
+  // restore_scope === 'active_only' → wipe non-current agent buckets on
+  // every agent switch so only the currently-selected agent has history
+  // when the user comes back next session.
+  useEffect(() => {
+    if (restoreScope !== 'active_only' || !restoreSettingsLoaded) return;
+    if (!availableAgents || availableAgents.length === 0) return;
+    const currentKey = currentAgent?.prompt_id || 'default';
+    availableAgents.forEach((agent) => {
+      const k = agent.prompt_id;
+      if (String(k) !== String(currentKey)) {
+        try {
+          localStorage.removeItem(STORAGE_KEY(userId, k));
+        } catch {
+          /* quota */
+        }
+      }
+    });
+  }, [
+    restoreScope,
+    restoreSettingsLoaded,
+    currentAgent,
+    availableAgents,
+    userId,
+  ]);
+
+  // Banner action: user picked Yes — load history and dismiss the prompt.
+  const acceptRestore = useCallback(() => {
+    const agentKey = currentAgent?.prompt_id || 'default';
+    setMessages(loadMessages(userId, agentKey));
+    setRestorePromptVisible(false);
+    setRestorePromptDecided(true);
   }, [currentAgent, userId]);
+
+  // Banner action: user picked No — start fresh.
+  const declineRestore = useCallback(() => {
+    setRestorePromptVisible(false);
+    setRestorePromptDecided(true);
+  }, []);
 
   // Persist messages on change
   useEffect(() => {
@@ -659,6 +815,14 @@ export default function NunbaChatProvider({children}) {
     setTtsEnabled,
     tts,
     getAgentPalette,
+    // J207 admin-controlled restore policy — exposed so ChatPanel
+    // can render the one-tap "Restore your last chat?" banner when
+    // restorePolicy === 'prompt' (or restoreScope === 'manual').
+    restorePolicy,
+    restoreScope,
+    restorePromptVisible,
+    acceptRestore,
+    declineRestore,
   };
 
   return (
