@@ -1357,14 +1357,46 @@ def tts_status():
 
 
 def tts_setup_engine():
-    """Install TTS engine packages + models on demand. Shows progress in chat."""
+    """Install TTS engine packages + models on demand. Shows progress in chat.
+
+    Payload contract (J67 regression guard):
+      * ``engine`` OR ``backend`` — REQUIRED, must be a known backend key.
+        Empty/missing → 400 ``engine_required``.
+        Unknown value → 400 ``unknown_engine`` (with the list of known
+        engines so the caller can recover).
+      * ``user_id`` — optional, used only for SSE progress routing.
+
+    Prior to J67 this handler silently fell back to ``chatterbox_turbo``
+    for ANY payload — including ``{"engine":"no-such-engine-xyz"}`` —
+    which kicked off a 2GB HuggingFace download for the wrong engine.
+    """
     try:
-        from tts.package_installer import install_backend_full, make_chat_progress_callback
+        from tts.package_installer import (
+            BACKEND_PACKAGES,
+            install_backend_full,
+            make_chat_progress_callback,
+        )
     except ImportError:
         return jsonify({'error': 'Package installer not available'}), 503
 
     data = request.get_json(silent=True) or {}
-    backend = data.get('backend', 'chatterbox_turbo')
+    # Accept both `engine` (J67 / J120 / frontend admin UI) and the
+    # legacy `backend` key — one canonical key would be nicer but the
+    # existing test surface uses both.  Treat them as aliases.
+    raw = data.get('engine') or data.get('backend') or ''
+    backend = raw.strip() if isinstance(raw, str) else ''
+    if not backend:
+        return jsonify({
+            'error': 'engine_required',
+            'message': 'Request body must include an "engine" (or "backend") field.',
+        }), 400
+    if backend not in BACKEND_PACKAGES:
+        return jsonify({
+            'error': 'unknown_engine',
+            'engine': backend,
+            'known_engines': sorted(BACKEND_PACKAGES.keys()),
+        }), 400
+
     user_id = data.get('user_id', '')
 
     # Push progress to chat view in real-time
