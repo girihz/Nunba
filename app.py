@@ -6245,8 +6245,164 @@ def main():
 
         _window.events.loaded += _on_any_loaded
 
-        # In background mode, reload the page on first show — the initial load
-        # may have hit Flask before it was fully ready (especially on Windows boot).
+        # ── Mount-recovery shared state (moved up so _force_remount_and_paint
+        #     can close over it; the full recovery-guard block further down
+        #     continues to use the SAME list instance). ──
+        _page_loaded_ok = [False]  # set True when React mounts successfully
+
+        # Reusable mount-recovery helper. Invoked from THREE entry points:
+        #   1. _on_bg_shown             — pywebview's `shown` event after
+        #                                 start_hidden → window.show() from tray
+        #   2. taskbar-restore-watchdog — Win32 IsIconic / IsWindowVisible
+        #                                 poller, for native taskbar restore
+        #                                 which does NOT fire pywebview events
+        #   3. events.restored (if exposed by the installed pywebview version)
+        #
+        # Historical note: this was previously inlined as `_ensure_react_mounted`
+        # inside `_on_bg_shown`, which meant only tray-restore (window.show)
+        # ran the recovery path. Taskbar restore left WebView2 paint-dead →
+        # black window. Extracted per Gate 4 (no parallel paths). Do NOT
+        # duplicate this body elsewhere — tests/test_background_mount_recovery.py
+        # asserts exactly one definition.
+        def _force_remount_and_paint(origin: str = 'unknown') -> None:
+            """Ensure React mounts inside pywebview after a visibility /
+            minimize→restore transition.
+
+            pywebview's WebView2 suspends rAF while hidden OR iconic. React 18's
+            createRoot uses rAF for scheduling, so the render may not complete
+            until we nudge the compositor. This function:
+              (1) waits for Flask (raw-socket, avoids proxy issues),
+              (2) checks mount state with a STRICTER predicate that also
+                  inspects the root's bounding box (paint-dead detection),
+              (3) reloads / resizes / force-repaints if needed, up to 3 tries.
+
+            ``origin`` is a short tag for the log lines so operators can tell
+            which path invoked recovery (shown / restored / watchdog).
+            """
+            _local_url = f"http://localhost:{args.port}/local"
+            _MAX_ATTEMPTS = 3
+
+            # ── Wait for Flask to be ready (raw socket, avoids proxy issues) ──
+            import socket as _bg_sock
+            for _ in range(15):
+                try:
+                    _bgs = _bg_sock.socket(_bg_sock.AF_INET, _bg_sock.SOCK_STREAM)
+                    _bgs.settimeout(1)
+                    _bgs.connect(('127.0.0.1', args.port))
+                    _bgs.close()
+                    break
+                except Exception:
+                    time.sleep(0.5)
+
+            def _check_mount():
+                """Returns one of:
+                  'mounted'    — React rendered content with non-zero height
+                  'paint_dead' — root has children but renders at 0 height
+                                 (WebView2 suspended the compositor; treat
+                                  as failure → reload path)
+                  'empty'      — root exists but has no children
+                  'no_root'    — #root element not in DOM
+                  None         — JS eval failed (bridge not ready)
+
+                Stricter than the old check which trusted `children.length > 0`
+                alone. Paint-dead states occurred on native taskbar restore
+                because pywebview's `shown` event didn't fire, leaving WebView2
+                compositor suspended even though React had already mounted.
+                """
+                try:
+                    return _window.evaluate_js(
+                        "(function(){"
+                        "  var r = document.getElementById('root');"
+                        "  if (!r) return 'no_root';"
+                        "  if (r.children.length === 0) return 'empty';"
+                        "  var h = 0;"
+                        "  try { h = r.getBoundingClientRect().height; }"
+                        "  catch(e) { h = 0; }"
+                        "  if (h === 0) return 'paint_dead';"
+                        "  return 'mounted';"
+                        "})()"
+                    )
+                except Exception:
+                    return None
+
+            for attempt in range(_MAX_ATTEMPTS):
+                # Give React a moment — rAF just resumed after visibility change
+                time.sleep(1.5 if attempt == 0 else 3.0)
+
+                state = _check_mount()
+                _trace(f"REMOUNT[{origin}]: mount check #{attempt + 1} = {state}")
+                logger.info(
+                    f"[REMOUNT:{origin}] Mount check #{attempt + 1}: {state}")
+
+                if state == 'mounted':
+                    _page_loaded_ok[0] = True
+                    # React is up but CSS transitions (opacity, blur) may not
+                    # have fired — WebView2 suspends CSS animations while hidden.
+                    # Force all transition-dependent elements to their final state.
+                    try:
+                        _window.evaluate_js(
+                            "(function(){"
+                            "  var hero = document.getElementById('hero-section');"
+                            "  if (hero) {"
+                            "    hero.style.transition = 'none';"
+                            "    hero.style.opacity = '1';"
+                            "    hero.style.filter = 'none';"
+                            "  }"
+                            "  document.querySelectorAll('[style*=\"opacity: 0\"]').forEach(function(el){"
+                            "    el.style.transition = 'none';"
+                            "    el.style.opacity = '1';"
+                            "    el.style.filter = 'none';"
+                            "  });"
+                            "  document.body.style.display = 'none';"
+                            "  void document.body.offsetHeight;"
+                            "  document.body.style.display = '';"
+                            "})()"
+                        )
+                    except Exception:
+                        pass
+                    logger.info(
+                        f"[REMOUNT:{origin}] React mounted — "
+                        "transitions forced, repaint done")
+                    return
+
+                # state is 'paint_dead', 'empty', 'no_root', or None —
+                # React either didn't mount OR WebView2 compositor is suspended.
+                # In both cases the reload path (with post-load resize kick)
+                # is the safest recovery.
+                logger.warning(
+                    f"[REMOUNT:{origin}] React not mounted ({state}) — "
+                    f"{'navigating' if attempt == 0 else 'reloading'}")
+                try:
+                    _window.load_url(_local_url)
+                except Exception as e:
+                    logger.warning(f"[REMOUNT:{origin}] load_url failed: {e}")
+                    continue
+
+                # After load, give React time to render
+                time.sleep(3.0)
+
+                # Force resize to wake WebView2 compositor
+                try:
+                    w, h = _window.width, _window.height
+                    _window.resize(w + 1, h)
+                    time.sleep(0.1)
+                    _window.resize(w, h)
+                except Exception:
+                    pass
+
+            # Final check after all attempts
+            final = _check_mount()
+            logger.info(
+                f"[REMOUNT:{origin}] Final mount state after "
+                f"{_MAX_ATTEMPTS} attempts: {final}")
+            if final != 'mounted':
+                logger.error(
+                    f"[REMOUNT:{origin}] React failed to mount after all "
+                    "retries. User will see black screen.")
+
+        # In background mode, run mount recovery on first show — the initial
+        # load may have hit Flask before it was fully ready (especially on
+        # Windows boot).
         if start_hidden:
             _bg_first_show = [True]  # mutable flag — only fire once
 
@@ -6255,114 +6411,139 @@ def main():
                     return
                 _bg_first_show[0] = False
                 _trace("EVENT: on_shown fired (first show from hidden)")
-
-                def _ensure_react_mounted():
-                    """Ensure React mounts inside pywebview after hidden→visible transition.
-
-                    pywebview's WebView2 suspends rAF while hidden. React 18's createRoot
-                    uses rAF for scheduling, so the initial render may not complete.
-                    This function: (1) waits for Flask, (2) checks mount state,
-                    (3) reloads if needed, (4) retries up to 3 times.
-                    """
-                    _local_url = f"http://localhost:{args.port}/local"
-                    _MAX_ATTEMPTS = 3
-
-                    # ── Wait for Flask to be ready (raw socket, avoids proxy issues) ──
-                    import socket as _bg_sock
-                    for _ in range(15):
-                        try:
-                            _bgs = _bg_sock.socket(_bg_sock.AF_INET, _bg_sock.SOCK_STREAM)
-                            _bgs.settimeout(1)
-                            _bgs.connect(('127.0.0.1', args.port))
-                            _bgs.close()
-                            break
-                        except Exception:
-                            time.sleep(0.5)
-
-                    def _check_mount():
-                        """Returns 'mounted', 'empty', 'no_root', or None (eval failed)."""
-                        try:
-                            return _window.evaluate_js(
-                                "(function(){"
-                                "  var r = document.getElementById('root');"
-                                "  if (!r) return 'no_root';"
-                                "  if (r.children.length === 0) return 'empty';"
-                                "  return 'mounted';"
-                                "})()"
-                            )
-                        except Exception:
-                            return None
-
-                    for attempt in range(_MAX_ATTEMPTS):
-                        # Give React a moment — rAF just resumed after visibility change
-                        time.sleep(1.5 if attempt == 0 else 3.0)
-
-                        state = _check_mount()
-                        _trace(f"BG_SHOWN: mount check #{attempt + 1} = {state}")
-                        logger.info(f"[BACKGROUND] Mount check #{attempt + 1}: {state}")
-
-                        if state == 'mounted':
-                            _page_loaded_ok[0] = True
-                            # React is up but CSS transitions (opacity, blur) may not
-                            # have fired — WebView2 suspends CSS animations while hidden.
-                            # Force all transition-dependent elements to their final state.
-                            try:
-                                _window.evaluate_js(
-                                    "(function(){"
-                                    "  var hero = document.getElementById('hero-section');"
-                                    "  if (hero) {"
-                                    "    hero.style.transition = 'none';"
-                                    "    hero.style.opacity = '1';"
-                                    "    hero.style.filter = 'none';"
-                                    "  }"
-                                    "  document.querySelectorAll('[style*=\"opacity: 0\"]').forEach(function(el){"
-                                    "    el.style.transition = 'none';"
-                                    "    el.style.opacity = '1';"
-                                    "    el.style.filter = 'none';"
-                                    "  });"
-                                    "  document.body.style.display = 'none';"
-                                    "  void document.body.offsetHeight;"
-                                    "  document.body.style.display = '';"
-                                    "})()"
-                                )
-                            except Exception:
-                                pass
-                            logger.info("[BACKGROUND] React mounted — transitions forced, repaint done")
-                            return
-
-                        # state is 'empty', 'no_root', or None — React didn't mount.
-                        # Navigate (or re-navigate) to the local page.
-                        logger.warning(f"[BACKGROUND] React not mounted ({state}) — "
-                                       f"{'navigating' if attempt == 0 else 'reloading'}")
-                        try:
-                            _window.load_url(_local_url)
-                        except Exception as e:
-                            logger.warning(f"[BACKGROUND] load_url failed: {e}")
-                            continue
-
-                        # After load, give React time to render
-                        time.sleep(3.0)
-
-                        # Force resize to wake WebView2 compositor
-                        try:
-                            w, h = _window.width, _window.height
-                            _window.resize(w + 1, h)
-                            time.sleep(0.1)
-                            _window.resize(w, h)
-                        except Exception:
-                            pass
-
-                    # Final check after all attempts
-                    final = _check_mount()
-                    logger.info(f"[BACKGROUND] Final mount state after {_MAX_ATTEMPTS} attempts: {final}")
-                    if final != 'mounted':
-                        logger.error("[BACKGROUND] React failed to mount after all retries. "
-                                     "User will see black screen.")
-
-                threading.Thread(target=_ensure_react_mounted, daemon=True,
-                                 name='bg_react_mount').start()
+                threading.Thread(
+                    target=_force_remount_and_paint,
+                    args=('bg_shown',),
+                    daemon=True,
+                    name='bg_react_mount',
+                ).start()
 
             _window.events.shown += _on_bg_shown
+
+        # Defensive: if the installed pywebview exposes `events.restored`
+        # (added in pywebview 4.4.x for some platforms), wire recovery to
+        # it too. This is belt-and-suspenders alongside the Win32 watchdog
+        # below — if pywebview fires `restored` we get recovery immediately;
+        # if it doesn't, the 500ms-polling watchdog still catches the
+        # transition within ~1s.
+        try:
+            _wv_events = getattr(_window, 'events', None)
+            if _wv_events is not None and hasattr(_wv_events, 'restored'):
+                def _on_window_restored():
+                    _trace("EVENT: on_restored fired")
+                    threading.Thread(
+                        target=_force_remount_and_paint,
+                        args=('events_restored',),
+                        daemon=True,
+                        name='restored_react_mount',
+                    ).start()
+                _wv_events.restored += _on_window_restored
+                logger.info(
+                    "[REMOUNT] events.restored hook wired (pywebview exposes it)")
+        except Exception as _re_err:
+            logger.debug(f"[REMOUNT] events.restored wiring skipped: {_re_err}")
+
+        # ── Windows-only watchdog: detect native SW_RESTORE from taskbar ──
+        # On Windows, clicking the Nunba taskbar button after a minimize is
+        # a native SW_RESTORE on the Winforms HWND. pywebview does NOT fire
+        # its `shown` event for this path (that event only fires when
+        # `.show()` is called from Python). Without this watchdog, WebView2
+        # stays paint-dead on taskbar restore → black window.
+        #
+        # Guarded by `sys.platform == 'win32'` — on macOS/Linux this is a
+        # no-op. IsIconic / IsWindowVisible are pure ctypes → no new deps.
+        # Gate 7 (multi-OS surface check).
+        if sys.platform == 'win32':
+            def _taskbar_restore_watchdog():
+                import ctypes as _wd_ct
+                _user32 = _wd_ct.windll.user32
+                _last_iconic = None
+                _last_visible = None
+                _poll_interval = 0.5  # 500ms — fast enough to feel instant
+
+                def _resolve_hwnd():
+                    # Prefer pywebview's exposed native handle (winforms)
+                    try:
+                        native = getattr(_window, 'native', None)
+                        if native is not None:
+                            h = getattr(native, 'Handle', None)
+                            if h:
+                                return int(h)
+                    except Exception:
+                        pass
+                    # original_window.handle (older pywebview)
+                    try:
+                        ow = getattr(_window, 'original_window', None)
+                        if ow is not None:
+                            h = getattr(ow, 'handle', None)
+                            if h:
+                                return int(h)
+                    except Exception:
+                        pass
+                    # Fallback: FindWindowW by title
+                    try:
+                        return int(_user32.FindWindowW(None, args.title) or 0)
+                    except Exception:
+                        return 0
+
+                while True:
+                    # Stop cleanly if window was destroyed (main() teardown
+                    # sets _window = None in the __main__ block).
+                    if _window is None:
+                        logger.info(
+                            "[WATCHDOG] _window is None — taskbar-restore "
+                            "watchdog exiting")
+                        return
+                    try:
+                        hwnd = _resolve_hwnd()
+                        if not hwnd:
+                            time.sleep(_poll_interval)
+                            continue
+                        iconic = bool(_user32.IsIconic(hwnd))
+                        visible = bool(_user32.IsWindowVisible(hwnd))
+
+                        # iconic→non-iconic is the taskbar-restore signal
+                        if (_last_iconic is True) and (iconic is False):
+                            _trace("WATCHDOG: iconic→non-iconic (taskbar restore)")
+                            logger.info(
+                                "[WATCHDOG] iconic→non-iconic transition; "
+                                "invoking _force_remount_and_paint")
+                            threading.Thread(
+                                target=_force_remount_and_paint,
+                                args=('taskbar_restore',),
+                                daemon=True,
+                                name='watchdog_react_mount',
+                            ).start()
+                        # hidden→visible as a defensive secondary (the
+                        # pywebview `shown` event already handles the
+                        # programmatic case, but if it was missed we still
+                        # recover here).
+                        elif (_last_visible is False) and (visible is True) \
+                                and (iconic is False):
+                            _trace("WATCHDOG: hidden→visible (non-iconic)")
+                            logger.info(
+                                "[WATCHDOG] hidden→visible transition; "
+                                "invoking _force_remount_and_paint")
+                            threading.Thread(
+                                target=_force_remount_and_paint,
+                                args=('watchdog_visible',),
+                                daemon=True,
+                                name='watchdog_react_mount',
+                            ).start()
+
+                        _last_iconic = iconic
+                        _last_visible = visible
+                    except Exception as _wd_err:
+                        logger.debug(f"[WATCHDOG] poll error: {_wd_err}")
+                    time.sleep(_poll_interval)
+
+            threading.Thread(
+                target=_taskbar_restore_watchdog,
+                daemon=True,
+                name='taskbar-restore-watchdog',
+            ).start()
+            logger.info(
+                "[WATCHDOG] taskbar-restore-watchdog started (Windows only)")
 
         # Deferred Flask reload — if Flask wasn't ready during the initial poll,
         # keep trying in the background and reload the webview once it responds.
@@ -6396,8 +6577,9 @@ def main():
             threading.Thread(target=_deferred_flask_reload, daemon=True).start()
             logger.info("[DEFERRED] Started background Flask poller for delayed reload")
 
-        # Shared reload guard — prevents multiple recovery paths from reloading simultaneously
-        _page_loaded_ok = [False]  # set True when React mounts successfully
+        # Shared reload guard — prevents multiple recovery paths from reloading
+        # simultaneously. _page_loaded_ok was hoisted above _force_remount_and_paint
+        # so all recovery paths share the SAME list instance (Gate 4).
         _page_recovery_count = [0]
         _recovery_port = args.port
 
