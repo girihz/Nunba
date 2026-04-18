@@ -816,9 +816,42 @@ def call_stop_api():
 DEVICE_ID = get_device_id()
 logging.info(f"Device ID: {DEVICE_ID}")
 
+# Bootstrap the hardware-derived stable guest_id BEFORE any request
+# comes in so /api/guest-id and the /local index.html injection both
+# see the same cached id.  The file lives under get_data_dir() so it
+# survives uninstall/reinstall — WebView2 localStorage wipes don't
+# reach it.  See desktop/guest_identity.py for the derivation
+# contract and J201/J206/J207 for the behavioural guards.
+try:
+    from desktop.guest_identity import get_guest_id as _get_guest_id
+    GUEST_ID = _get_guest_id()
+    logging.info(f"Guest ID (hardware-derived): {GUEST_ID}")
+except Exception as _gie:
+    # Never crash Flask boot because of guest-id derivation — degrade
+    # gracefully so the frontend's chain still works (it falls through
+    # to 'guest' if window.__NUNBA_GUEST_ID__ is null).
+    logging.warning(f"guest_id bootstrap failed: {_gie}")
+    GUEST_ID = None
+
 @app.route('/probe', methods=['GET'])
 def probe_endpoint():
     return jsonify({"status": "Probe successful", "message": "Service is operational"}), 200
+
+
+@app.route('/api/guest-id', methods=['GET'])
+def api_guest_id():
+    """Return the hardware-derived stable guest_id for the frontend.
+
+    Contract (J207):
+      * 200 + {"guest_id": "g_<16 hex>"} on success
+      * 503 + {"error": "unavailable"} if derivation failed at boot
+      * Two calls in the same process MUST return the same value
+    The frontend reads this in its fallback chain so guest identity
+    survives a WebView2 cache wipe (uninstall/reinstall cycle).
+    """
+    if not GUEST_ID:
+        return jsonify({'error': 'unavailable'}), 503
+    return jsonify({'guest_id': GUEST_ID}), 200
 
 def get_embedded_python_path():
     """Get the path to the embedded Python executable"""
@@ -2370,13 +2403,72 @@ def serve_landing_page_root():
     return redirect('/local', code=302)
 
 
+def _inject_guest_id_into_html(html_text: str) -> str:
+    """Inject `window.__NUNBA_GUEST_ID__` into an index.html at request
+    time so the React SPA can read the hardware-derived guest id
+    synchronously (no API round-trip, no race with first-paint).
+
+    The frontend fallback chain uses this AFTER localStorage (so it
+    only kicks in when localStorage was wiped — exactly the WebView2
+    UserDataFolder-wipe scenario we're protecting against).
+
+    Idempotent: if __NUNBA_GUEST_ID__ is already present (e.g. the
+    builder pre-injected it) we skip.  Never crashes the response —
+    worst case the frontend sees no global and falls through to
+    /api/guest-id or plain 'guest'.
+    """
+    if not GUEST_ID:
+        return html_text
+    try:
+        if 'window.__NUNBA_GUEST_ID__' in html_text:
+            return html_text
+        # JSON-encode the id so a malicious override can't break out
+        # of the string literal (defence-in-depth; derivation is SHA
+        # truncation so characters are always [0-9a-f_]).
+        import json as _json
+        safe_id = _json.dumps(GUEST_ID)
+        snippet = (
+            f"<script>window.__NUNBA_GUEST_ID__={safe_id};</script>"
+        )
+        # Inject just before </head>; fall back to prepending if
+        # </head> isn't present for any reason.
+        idx = html_text.lower().find('</head>')
+        if idx == -1:
+            return snippet + html_text
+        return html_text[:idx] + snippet + html_text[idx:]
+    except Exception as _ie:  # noqa: BLE001 — never let injection break render
+        logging.debug(f"guest-id injection skipped: {_ie}")
+        return html_text
+
+
+def _render_spa_index(build_dir: str):
+    """Render the SPA index.html with guest-id injection.
+
+    Used by every route that serves index.html (`/local`, the `/` SPA
+    fallback, and the 404 handler) so the injected global is present
+    regardless of which path the webview hit first.
+    """
+    from flask import Response
+    index_path = os.path.join(build_dir, 'index.html')
+    if not os.path.exists(index_path):
+        return None
+    try:
+        with open(index_path, encoding='utf-8') as fh:
+            html_text = fh.read()
+    except Exception as e:
+        logging.warning(f"read index.html failed: {e}")
+        return None
+    html_text = _inject_guest_id_into_html(html_text)
+    return Response(html_text, 200, content_type='text/html; charset=utf-8')
+
+
 @app.route('/local')
 def serve_local_page():
     """Always serve local page (for offline use or testing)"""
-    from flask import Response, send_from_directory
-    index_path = os.path.join(LANDING_PAGE_BUILD_DIR, 'index.html')
-    if os.path.exists(index_path):
-        return send_from_directory(LANDING_PAGE_BUILD_DIR, 'index.html')
+    from flask import Response
+    rendered = _render_spa_index(LANDING_PAGE_BUILD_DIR)
+    if rendered is not None:
+        return rendered
     return Response(
         '<html><body style="background:#0F0E17;color:#fff;font-family:sans-serif;display:flex;'
         'align-items:center;justify-content:center;height:100vh;margin:0">'
@@ -2701,7 +2793,10 @@ def serve_static_file(path):
     file_path = os.path.join(LANDING_PAGE_BUILD_DIR, path)
     if os.path.exists(file_path) and os.path.isfile(file_path):
         return send_from_directory(LANDING_PAGE_BUILD_DIR, path)
-    # For client-side routing, serve index.html
+    # For client-side routing, serve index.html with guest-id injected.
+    rendered = _render_spa_index(LANDING_PAGE_BUILD_DIR)
+    if rendered is not None:
+        return rendered
     return send_from_directory(LANDING_PAGE_BUILD_DIR, 'index.html')
 
 # Static file routes (must be explicit to not conflict with API routes)
@@ -2739,10 +2834,10 @@ def handle_404(e):
     if os.path.exists(full_path) and os.path.isfile(full_path):
         return send_from_directory(LANDING_PAGE_BUILD_DIR, file_path)
 
-    # Serve React app for client-side routing
-    index_path = os.path.join(LANDING_PAGE_BUILD_DIR, 'index.html')
-    if os.path.exists(index_path):
-        return send_from_directory(LANDING_PAGE_BUILD_DIR, 'index.html')
+    # Serve React app for client-side routing (with guest-id injection)
+    rendered = _render_spa_index(LANDING_PAGE_BUILD_DIR)
+    if rendered is not None:
+        return rendered
     return jsonify({'error': 'Not found', 'hint': 'React app not built. Run: cd landing-page && npm run build'}), 404
 
 # Initialize crash reporting
