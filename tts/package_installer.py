@@ -191,6 +191,21 @@ def get_embed_site_packages() -> str | None:
     return None
 
 
+def _canonical_import_name(pkg_spec: str) -> str:
+    """Convert a pip requirement spec into the importable module name.
+
+    Handles version specifiers (``huggingface_hub>=0.27.0,<0.29.0`` →
+    ``huggingface_hub``) and pip→import aliasing (``chatterbox-tts`` →
+    ``chatterbox``) in a single pass.  Single source of truth — callers
+    who need to ask "is this pip package importable?" MUST go through
+    this helper.  See J67 regression: previously version specifiers
+    leaked into ``importlib.util.find_spec`` which raises
+    ``ModuleNotFoundError`` on strings like ``huggingface_hub>=0``.
+    """
+    bare = re.split(r'[<>=!~]', pkg_spec, maxsplit=1)[0].strip()
+    return _PIP_TO_IMPORT.get(bare, bare.replace('-', '_'))
+
+
 def is_package_installed(import_name: str) -> bool:
     """Check if a Python package is importable."""
     return importlib.util.find_spec(import_name) is not None
@@ -575,15 +590,12 @@ def install_backend_packages(backend: str,
         return True, f"No packages needed for {backend}"
 
     # Check what's already installed.  Pip specs like `parler-tts==0.2.2`
-    # carry a version clause; strip it before doing the import-name
-    # lookup — otherwise `importlib.util.find_spec('parler_tts==0.2.2')`
-    # raises ValueError (J67 red-product).
-    import re as _re_pkgspec
+    # carry a version clause; `_canonical_import_name` strips it before
+    # the import-name lookup — otherwise `importlib.util.find_spec(
+    # 'parler_tts==0.2.2')` raises ModuleNotFoundError (J67 red-product).
     to_install = []
     for pkg in packages:
-        bare = _re_pkgspec.split(r'[=<>!~]', pkg, maxsplit=1)[0].strip()
-        import_name = _PIP_TO_IMPORT.get(bare, bare.replace('-', '_'))
-        if not is_package_installed(import_name):
+        if not is_package_installed(_canonical_import_name(pkg)):
             to_install.append(pkg)
 
     display_name = BACKEND_DISPLAY_NAMES.get(backend, backend)
@@ -641,10 +653,14 @@ def install_backend_packages(backend: str,
     # Invalidate import cache so _can_run_backend() re-checks
     _invalidate_import_cache()
 
-    # Verify installation
+    # Verify installation.  Use `_canonical_import_name` so a spec like
+    # `huggingface_hub>=0.27.0,<0.29.0` is stripped to `huggingface_hub`
+    # before `find_spec` — otherwise `find_spec('huggingface_hub>=0')`
+    # raises ModuleNotFoundError, masking a successful install and
+    # producing an empty-500 to the caller (J67 red-product).
     all_ok = True
     for pkg in packages:
-        import_name = _PIP_TO_IMPORT.get(pkg, pkg.replace('-', '_'))
+        import_name = _canonical_import_name(pkg)
         if not is_package_installed(import_name):
             all_ok = False
             logger.warning(f"Package {pkg} ({import_name}) not importable after install")
@@ -889,14 +905,10 @@ def get_backend_status() -> dict[str, dict]:
     for backend, packages in BACKEND_PACKAGES.items():
         missing = []
         for pkg in packages:
-            # Strip pip version spec ('parler_tts==0.6.0' → 'parler_tts')
-            # before resolving the import name. importlib.util.find_spec
-            # RAISES ModuleNotFoundError (not returns None) when the
-            # argument contains '==', so unstripped specs crash the
-            # whole /tts/engines endpoint.
-            base_pkg = re.split(r'[=<>!~\s]', pkg, maxsplit=1)[0]
-            import_name = _PIP_TO_IMPORT.get(base_pkg, base_pkg.replace('-', '_'))
-            if not is_package_installed(import_name):
+            # `_canonical_import_name` strips the pip version spec before
+            # the import-name lookup — see J67 regression note on
+            # `importlib.util.find_spec` crashing on unstripped specs.
+            if not is_package_installed(_canonical_import_name(pkg)):
                 missing.append(pkg)
 
         status[backend] = {

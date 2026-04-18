@@ -117,6 +117,68 @@ class TestGetEmbedSitePackages:
             assert pi.get_embed_site_packages() is None
 
 
+# ========================== _canonical_import_name ========================
+
+class TestCanonicalImportName:
+    """J67 regression guard — every pip requirement spec must resolve
+    to the BARE importable module name before it reaches
+    `importlib.util.find_spec`.  `find_spec` raises
+    ModuleNotFoundError on strings containing '==', '>=', etc.
+    """
+
+    def test_strips_gte_version(self):
+        assert pi._canonical_import_name('huggingface_hub>=0') == 'huggingface_hub'
+
+    def test_strips_gte_with_upper_bound(self):
+        assert pi._canonical_import_name(
+            'huggingface_hub>=0.27.0,<0.29.0'
+        ) == 'huggingface_hub'
+
+    def test_strips_lt_version(self):
+        assert pi._canonical_import_name('numpy<2.0.0') == 'numpy'
+
+    def test_strips_eq_version(self):
+        assert pi._canonical_import_name('torch==2.4.1') == 'torch'
+
+    def test_strips_ne_version(self):
+        assert pi._canonical_import_name('foo!=1.2.3') == 'foo'
+
+    def test_strips_compat_spec(self):
+        assert pi._canonical_import_name('bar~=1.0') == 'bar'
+
+    def test_applies_pip_to_import_alias(self):
+        # chatterbox-tts (pip) → chatterbox (import)
+        assert pi._canonical_import_name('chatterbox-tts') == 'chatterbox'
+
+    def test_applies_alias_with_version(self):
+        assert pi._canonical_import_name('parler-tts==0.2.2') == 'parler_tts'
+
+    def test_dash_to_underscore_fallback(self):
+        # piper-tts has no alias → dash→underscore fallback
+        assert pi._canonical_import_name('piper-tts') == 'piper_tts'
+
+    def test_bare_name_passes_through(self):
+        assert pi._canonical_import_name('torchaudio') == 'torchaudio'
+
+    def test_no_pip_operator_ever_returned(self):
+        # Belt-and-suspenders: whatever we throw at this helper, the
+        # return value must be a valid Python identifier-ish string —
+        # never contains pip version operators.
+        samples = [
+            'huggingface_hub>=0',
+            'numpy<2.0.0',
+            'torch==2.4.1',
+            'piper-tts',
+            'chatterbox-tts>=1.0.0',
+            'foo!=1.2.3',
+            'bar~=1.0',
+        ]
+        for s in samples:
+            out = pi._canonical_import_name(s)
+            for op in ('==', '>=', '<=', '!=', '>', '<', '~'):
+                assert op not in out, f'{s!r} → {out!r} leaked {op!r}'
+
+
 # ========================== is_package_installed ==========================
 
 class TestIsPackageInstalled:
