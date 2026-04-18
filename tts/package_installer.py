@@ -42,13 +42,11 @@ BACKEND_PACKAGES = {
         'torchaudio',
         'chatterbox-tts',
     ],
-    'indic_parler': [
-        _HF_HUB_PIN,
-        'torchaudio',
-        'sentencepiece',
-        'descript-audio-codec',
-        'parler-tts==0.2.2',  # 0.2.3 has DacModel.decode() API mismatch with dac 1.0
-    ],
+    # Indic Parler lives in its OWN venv (see BACKEND_VENV_PACKAGES
+    # below) because parler-tts==0.2.2 needs transformers<4.47, while
+    # the main interpreter is pinned to transformers 5.1.0 for
+    # chatterbox_ml / f5 / cosyvoice. Track B, Phase 6 refactor.
+    'indic_parler': [],
     'cosyvoice3': [
         'torchaudio',
         # cosyvoice is NOT pip-installable — needs cloned repo
@@ -67,6 +65,27 @@ BACKEND_PACKAGES = {
     'luxtts': [],       # CPU in-process, bundled via HARTOS
     'pocket_tts': [
         'pocket-tts',
+    ],
+}
+
+# Backends that live in their OWN venv under ~/Documents/Nunba/data/venvs/
+# (see tts/backend_venv.py). Each venv's dep set is independent and may
+# pin conflicting transformers / torch versions without contaminating
+# the main interpreter or each other.
+#
+# Track B, Phase 6: parler-tts 0.2.2 + transformers 4.46.1 can't coexist
+# with the main interpreter's transformers 5.1.0, so Indic Parler is
+# quarantined here. Other backends can be migrated as their pins drift.
+BACKEND_VENV_PACKAGES = {
+    'indic_parler': [
+        'transformers==4.46.1',   # parler-tts 0.2.2 requires <4.47
+        'torch',                   # CPU-ish fallback; replaced by CUDA if GPU
+        'torchaudio',
+        'sentencepiece',
+        'descript-audio-codec',
+        'parler-tts==0.2.2',       # 0.2.3 has DacModel.decode() API mismatch
+        'soundfile',
+        'huggingface_hub>=0.27.0,<0.29.0',
     ],
 }
 
@@ -695,12 +714,30 @@ def install_backend_full(backend: str,
         if progress_cb:
             progress_cb(f"Setting up {display_name}...")
 
-        # Step 1: pip packages
-        if progress_cb:
-            progress_cb(f"Step 1/2: Installing Python packages for {display_name}...")
-        pkg_ok, pkg_msg = install_backend_packages(backend, progress_cb)
-        if not pkg_ok:
-            return False, pkg_msg
+        # Step 1a: if this backend is venv-quarantined, route the pip
+        # install into its dedicated venv instead of the main interp.
+        # Track B, Phase 6: Indic Parler's parler-tts+transformers pins
+        # collide with the main interpreter, so it lives in its own venv.
+        venv_pkgs = BACKEND_VENV_PACKAGES.get(backend)
+        if venv_pkgs:
+            if progress_cb:
+                progress_cb(
+                    f"Step 1/2: Creating dedicated venv for {display_name} "
+                    f"({len(venv_pkgs)} packages)..."
+                )
+            from tts.backend_venv import ensure_venv, install_into_venv
+            ensure_venv(backend)
+            venv_ok, venv_msg = install_into_venv(backend, venv_pkgs)
+            if not venv_ok:
+                return False, f"venv install failed: {venv_msg}"
+            pkg_ok, pkg_msg = True, venv_msg
+        else:
+            # Step 1b: normal main-interpreter install path.
+            if progress_cb:
+                progress_cb(f"Step 1/2: Installing Python packages for {display_name}...")
+            pkg_ok, pkg_msg = install_backend_packages(backend, progress_cb)
+            if not pkg_ok:
+                return False, pkg_msg
 
         # Post-install patches for known compatibility issues
         _apply_post_install_patches(backend)
@@ -900,9 +937,37 @@ def get_backend_status() -> dict[str, dict]:
     """Get installation status for all TTS backends.
 
     Returns dict of backend → {installed, has_model, display_name, packages_missing}.
+
+    For venv-quarantined backends (Track B, Phase 6), readiness is
+    determined by `backend_venv.is_venv_healthy(<backend>, <probe>)`
+    rather than by main-interpreter find_spec — the backend's
+    packages live in its dedicated venv and are never importable
+    from the main process.
     """
+    # Probe module per venv backend — single source of truth so UI
+    # reflects reality post-install.
+    _VENV_PROBE = {'indic_parler': 'parler_tts'}
+
     status = {}
     for backend, packages in BACKEND_PACKAGES.items():
+        if backend in BACKEND_VENV_PACKAGES:
+            # Venv-quarantined: ask backend_venv, not main interpreter.
+            try:
+                from tts.backend_venv import is_venv_healthy
+                healthy = is_venv_healthy(backend, _VENV_PROBE.get(backend))
+            except Exception:
+                healthy = False
+            status[backend] = {
+                'display_name': BACKEND_DISPLAY_NAMES.get(backend, backend),
+                'installed': healthy,
+                'packages_missing': (
+                    [] if healthy else list(BACKEND_VENV_PACKAGES[backend])
+                ),
+                'installing': _installing.get(backend, False),
+                'venv_backed': True,
+            }
+            continue
+
         missing = []
         for pkg in packages:
             # `_canonical_import_name` strips the pip version spec before
