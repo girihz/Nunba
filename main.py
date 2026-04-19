@@ -1898,7 +1898,7 @@ _TRUSTED_HF_ORGS = _get_trusted_orgs_legacy_view  # callable, not a set
 # unblocks capability-based routing without introducing any new enum
 # or taxonomy — the keys below are the ones already used by seeded
 # populators (`'image_input'`, `'tts'`, `'stt'`, `'music_gen'`, etc.).
-_CATEGORY_CAPABILITIES: Dict[str, Dict[str, bool]] = {
+_CATEGORY_CAPABILITIES: dict[str, dict[str, bool]] = {
     'llm':         {'text_gen': True, 'reason': True},
     'draft':       {'text_gen': True, 'reason': True, 'draft': True},
     'translate':   {'text_gen': True, 'translate': True},
