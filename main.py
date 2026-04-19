@@ -888,6 +888,8 @@ def api_guest_id_delete():
     try:
         from desktop.guest_identity import (
             get_guest_id_file_path,
+        )
+        from desktop.guest_identity import (
             reset_cache_for_tests as _reset_guest_cache,
         )
         gid_path = get_guest_id_file_path()
@@ -2244,8 +2246,10 @@ def admin_models_hub_install():
                 # validated by the load probe above).
                 if validated:
                     try:
-                        from integrations.agent_engine.hive_benchmark_prover \
-                            import get_benchmark_prover, KNOWN_BASELINES
+                        from integrations.agent_engine.hive_benchmark_prover import (
+                            KNOWN_BASELINES,
+                            get_benchmark_prover,
+                        )
                         _baselines = KNOWN_BASELINES.get(safe_id) or {}
                         if _baselines:
                             _bench = next(iter(_baselines.keys()))

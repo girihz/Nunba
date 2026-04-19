@@ -220,6 +220,7 @@ class _LiveHTTPAdapter:
         # real work and producing spurious FAILs.  The `NUNBA_LIVE_TIMEOUT`
         # env var lets operators stretch this further for slower hardware.
         import os
+
         import requests
         env_to = os.environ.get("NUNBA_LIVE_TIMEOUT")
         if env_to:

@@ -120,18 +120,29 @@ def print_error(text):
     print(f"[ERROR] {text}", flush=True)
 
 
-def run_command(cmd, description=None, check=True):
-    """Run a command and optionally check for errors"""
+def run_command(cmd, description=None, check=True, timeout_s=None):
+    """Run a command and optionally check for errors.
+
+    timeout_s: if set, kill the subprocess after this many seconds and
+    return False instead of blocking forever.  Used by acceptance gates
+    that historically have wedged (e.g. the langchain-fix infinite-loop
+    on some dev machines, 2026-04-19) — the bundle itself is usable but
+    the verify step loops for 80+ min of CPU with no log output.
+    """
     if description:
         print_info(description)
     print(f"  > {cmd if isinstance(cmd, str) else ' '.join(cmd)}", flush=True)
 
     try:
         if isinstance(cmd, str):
-            result = subprocess.run(cmd, shell=True, check=check)
+            result = subprocess.run(cmd, shell=True, check=check, timeout=timeout_s)
         else:
-            result = subprocess.run(cmd, check=check)
+            result = subprocess.run(cmd, check=check, timeout=timeout_s)
         return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        _cmd_str = cmd if isinstance(cmd, str) else ' '.join(cmd)
+        print_error(f"Command TIMED OUT after {timeout_s}s: {_cmd_str}")
+        return False
     except subprocess.CalledProcessError as e:
         print_error(f"Command failed with exit code {e.returncode}")
         return False

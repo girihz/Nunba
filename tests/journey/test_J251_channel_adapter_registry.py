@@ -124,14 +124,14 @@ def test_j251_registry_dict_is_introspectable():
 def test_j251_unknown_channel_type_is_rejected():
     """Guard against typos. register_channel('telgram', ...) must not
     register a fake channel and silently swallow the typo."""
-    from integrations.channels.flask_integration import (
-        FlaskChannelIntegration, init_channels,
-    )
-
     # Build an isolated integration (don't reuse the global)
     # Minimal config — we're not driving real traffic, just the
     # register-type validation.
     from flask import Flask
+    from integrations.channels.flask_integration import (
+        FlaskChannelIntegration,
+        init_channels,
+    )
     app = Flask(__name__ + "_j251")
     integration = init_channels(app, {
         'agent_api_url': 'http://localhost:9999/chat',
@@ -150,9 +150,9 @@ def test_j251_unknown_channel_type_is_rejected():
 
     adapters = getattr(integration.registry, '_adapters', {}) or {}
     assert 'telgram' not in adapters, (
-        f"Typo channel type 'telgram' was registered — "
-        f"register_channel does not validate the type against a "
-        f"known-list. Users who mistype get silent failures."
+        "Typo channel type 'telgram' was registered — "
+        "register_channel does not validate the type against a "
+        "known-list. Users who mistype get silent failures."
     )
     # The return value should explicitly signal failure (False or None).
     assert result in (False, None), (
@@ -165,9 +165,8 @@ def test_j251_unknown_channel_type_is_rejected():
 def test_j251_web_channel_registrable_without_token():
     """web adapter is in-process — it must accept register_channel('web')
     with NO token parameter (main.py:3182 calls without token)."""
-    from integrations.channels.flask_integration import init_channels
-
     from flask import Flask
+    from integrations.channels.flask_integration import init_channels
     app = Flask(__name__ + "_j251_web")
     integration = init_channels(app, {
         'agent_api_url': 'http://localhost:9999/chat',

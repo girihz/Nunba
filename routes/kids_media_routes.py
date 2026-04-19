@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 # in HARTOS integrations and can cause circular-import timing issues if
 # imported here; the function body lazy-imports on first real call.
 import requests as req  # noqa: E402
+
 adapter = None  # type: ignore[assignment]
 
 # Lazy imports to avoid circular deps at module level

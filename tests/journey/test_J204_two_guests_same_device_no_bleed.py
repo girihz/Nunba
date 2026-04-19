@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from ._live_client import live_nunba, _unique_device_id  # noqa: F401
+from ._live_client import _unique_device_id, live_nunba  # noqa: F401
 
 pytestmark = pytest.mark.journey
 

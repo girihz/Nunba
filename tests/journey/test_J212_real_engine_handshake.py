@@ -91,14 +91,14 @@ def test_j212_real_piper_handshake_produces_real_audio(real_piper_engine):
     disk is > MIN_AUDIO_BYTES AND contains enough sample frames to
     exceed MIN_DURATION_S.  Catches `sympy`-class regressions because
     the entire onnxruntime path runs."""
+    # Clear the handshake cache so a prior session's result doesn't
+    # leak into this test's assertion.
+    from tts import tts_handshake as _h
     from tts.tts_handshake import (
         MIN_AUDIO_BYTES,
         MIN_DURATION_S,
         run_handshake,
     )
-    # Clear the handshake cache so a prior session's result doesn't
-    # leak into this test's assertion.
-    from tts import tts_handshake as _h
     with _h._cache_lock:
         _h._cache.clear()
 
@@ -172,8 +172,8 @@ def test_j212_handshake_broadcast_emits_ready_with_audio(
     matches the tts_handshake contract.  The UI consumer uses these
     exact keys; a silent rename would leave the banner stuck on
     ``preparing``."""
-    from tts.tts_handshake import run_handshake
     from tts import tts_handshake as _h
+    from tts.tts_handshake import run_handshake
     with _h._cache_lock:
         _h._cache.clear()
 
@@ -262,7 +262,7 @@ def test_j212_handshake_local_playback_attempted_when_available(
     lack an audio device but users do have one."""
     try:
         import sounddevice  # noqa: F401  # type: ignore
-        import soundfile    # noqa: F401  # type: ignore
+        import soundfile  # noqa: F401  # type: ignore
     except Exception as e:
         pytest.skip(
             f"sounddevice/soundfile not importable on this host "

@@ -67,7 +67,7 @@ class TestDefaults:
 class TestPolicyAllowlist:
     @pytest.mark.parametrize("policy", ["always", "prompt", "never", "session"])
     def test_each_policy_value_round_trips(self, isolated_data_dir, policy):
-        from desktop.chat_settings import update_chat_settings, get_chat_settings, reset_cache_for_tests
+        from desktop.chat_settings import get_chat_settings, reset_cache_for_tests, update_chat_settings
         update_chat_settings({"restore_policy": policy})
         # Force re-read from disk to verify persistence (not just cache)
         reset_cache_for_tests()
@@ -82,7 +82,7 @@ class TestPolicyAllowlist:
         self, isolated_data_dir
     ):
         """When the write fails, on-disk state must not change."""
-        from desktop.chat_settings import update_chat_settings, get_chat_settings
+        from desktop.chat_settings import get_chat_settings, update_chat_settings
         # First write a valid value so the file exists
         update_chat_settings({"restore_policy": "never"})
         with pytest.raises(ValueError):
@@ -93,7 +93,7 @@ class TestPolicyAllowlist:
 class TestScopeAllowlist:
     @pytest.mark.parametrize("scope", ["all_agents", "active_only", "manual"])
     def test_each_scope_value_round_trips(self, isolated_data_dir, scope):
-        from desktop.chat_settings import update_chat_settings, get_chat_settings, reset_cache_for_tests
+        from desktop.chat_settings import get_chat_settings, reset_cache_for_tests, update_chat_settings
         update_chat_settings({"restore_scope": scope})
         reset_cache_for_tests()
         assert get_chat_settings().restore_scope == scope
@@ -107,7 +107,7 @@ class TestScopeAllowlist:
 class TestCloudSyncFlag:
     @pytest.mark.parametrize("v", [True, False])
     def test_bool_round_trips(self, isolated_data_dir, v):
-        from desktop.chat_settings import update_chat_settings, get_chat_settings, reset_cache_for_tests
+        from desktop.chat_settings import get_chat_settings, reset_cache_for_tests, update_chat_settings
         update_chat_settings({"cloud_sync_enabled": v})
         reset_cache_for_tests()
         assert get_chat_settings().cloud_sync_enabled is v
@@ -190,7 +190,7 @@ class TestPayloadValidation:
             update_chat_settings("not a dict")  # type: ignore[arg-type]
 
     def test_empty_dict_is_noop(self, isolated_data_dir):
-        from desktop.chat_settings import update_chat_settings, get_chat_settings
+        from desktop.chat_settings import get_chat_settings, update_chat_settings
         before = get_chat_settings().to_dict()
         after = update_chat_settings({}).to_dict()
         assert before == after
@@ -206,7 +206,7 @@ class TestCacheInvariants:
         assert a is b
 
     def test_update_invalidates_cache(self, isolated_data_dir):
-        from desktop.chat_settings import update_chat_settings, get_chat_settings
+        from desktop.chat_settings import get_chat_settings, update_chat_settings
         before = get_chat_settings()
         new = update_chat_settings({"restore_policy": "never"})
         after = get_chat_settings()

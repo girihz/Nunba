@@ -209,7 +209,7 @@ def test_retry_clears_cache_and_reruns():
     re-attempts synthesis — the whole point of the Retry button.
     """
     _clear_cache()
-    from tts.tts_handshake import run_handshake, retry
+    from tts.tts_handshake import retry, run_handshake
 
     class _FlipEngine:
         """First synth fails (empty), second succeeds — simulates a
@@ -263,8 +263,9 @@ def test_greeting_lang_fallback_to_english():
     we still run a real synth probe rather than silently skip it.
     """
     _clear_cache()
-    from tts.tts_handshake import run_handshake
     from core.constants import GREETING_FALLBACK_LANG, GREETINGS
+
+    from tts.tts_handshake import run_handshake
     engine = _ValidWavEngine()
     result = run_handshake(engine, 'fake_ok', lang='tlh',  # Klingon
                            timeout_s=5, broadcast=False, play_audio=False)

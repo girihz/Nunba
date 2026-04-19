@@ -54,8 +54,8 @@ MIN_AUDIO_BYTES = 10_000
 # Imported at module scope so tests that AST-inspect this file still
 # see no inline dict literal.  See tests/test_greetings_constants.py
 # for the guard.
-from core.constants import GREETINGS as _TEST_PHRASES  # noqa: F401
 from core.constants import GREETING_FALLBACK_LANG as _FALLBACK_LANG
+from core.constants import GREETINGS as _TEST_PHRASES  # noqa: F401
 
 
 @dataclass

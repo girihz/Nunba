@@ -732,8 +732,9 @@ class VLMLoader(ModelLoader):
         if svc is None:
             return (False, 'VisionService unavailable')
         try:
-            from PIL import Image
             import io
+
+            from PIL import Image
             buf = io.BytesIO()
             Image.new('RGB', (32, 32), color=(220, 40, 40)).save(buf, format='JPEG')
             jpeg_bytes = buf.getvalue()

@@ -78,9 +78,9 @@ _DEMOTED_LANGS: tuple[str, ...] = (
 def test_j213_cosyvoice3_not_primary_for_international():
     """For every demoted lang, the FIRST backend must not be cosyvoice."""
     from tts.tts_engine import (
+        _FALLBACK_LANG_ENGINE_PREFERENCE,
         BACKEND_CHATTERBOX_ML,
         BACKEND_COSYVOICE3,
-        _FALLBACK_LANG_ENGINE_PREFERENCE,
     )
     for lang in _DEMOTED_LANGS:
         prefs = _FALLBACK_LANG_ENGINE_PREFERENCE[lang]
@@ -96,9 +96,9 @@ def test_j213_cosyvoice3_not_primary_for_international():
 def test_j213_chatterbox_ml_is_promoted_primary():
     """Chatterbox ML replaces CosyVoice3 as the primary for the 8."""
     from tts.tts_engine import (
-        BACKEND_CHATTERBOX_ML,
         _FALLBACK_ENGINE_CAPABILITIES,
         _FALLBACK_LANG_ENGINE_PREFERENCE,
+        BACKEND_CHATTERBOX_ML,
     )
     for lang in _DEMOTED_LANGS:
         prefs = _FALLBACK_LANG_ENGINE_PREFERENCE[lang]
@@ -127,8 +127,8 @@ def test_j213_cosyvoice3_still_available_secondary():
     """Power-users who clone the repo still get CosyVoice3 — demote
     is a policy change, not a removal."""
     from tts.tts_engine import (
-        BACKEND_COSYVOICE3,
         _FALLBACK_LANG_ENGINE_PREFERENCE,
+        BACKEND_COSYVOICE3,
     )
     for lang in _DEMOTED_LANGS:
         prefs = _FALLBACK_LANG_ENGINE_PREFERENCE[lang]
@@ -144,7 +144,7 @@ def test_j213_default_preference_not_cosyvoice_first():
     """A language not listed in _FALLBACK_LANG_ENGINE_PREFERENCE
     (e.g. an exotic ISO-639-3 code) must not route to cosyvoice by
     default either."""
-    from tts.tts_engine import BACKEND_COSYVOICE3, _DEFAULT_PREFERENCE
+    from tts.tts_engine import _DEFAULT_PREFERENCE, BACKEND_COSYVOICE3
     assert _DEFAULT_PREFERENCE, "_DEFAULT_PREFERENCE is empty"
     assert _DEFAULT_PREFERENCE[0] != BACKEND_COSYVOICE3, (
         "_DEFAULT_PREFERENCE still starts with cosyvoice3 — the "

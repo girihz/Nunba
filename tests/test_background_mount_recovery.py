@@ -36,7 +36,6 @@ import re
 
 import pytest
 
-
 APP_PY = os.path.abspath(
     os.path.join(os.path.dirname(__file__), os.pardir, 'app.py')
 )
@@ -48,7 +47,7 @@ APP_PY = os.path.abspath(
 
 @pytest.fixture(scope='module')
 def app_source() -> str:
-    with open(APP_PY, 'r', encoding='utf-8') as fh:
+    with open(APP_PY, encoding='utf-8') as fh:
         return fh.read()
 
 

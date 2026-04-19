@@ -148,7 +148,7 @@ def test_j214_set_language_pins_new_backend(
 
     if state is not None:
         assert state.pressure_evict_only is True, (
-            f"tracked state exists but pressure_evict_only still False"
+            "tracked state exists but pressure_evict_only still False"
         )
     else:
         assert staged.get("pressure_evict_only") is True, (
@@ -175,7 +175,7 @@ def test_j214_lang_switch_unpins_previous_pins_new(
     indic_tool = _tool_name(BACKEND_INDIC_PARLER)
     english_tool = _tool_name(BACKEND_CHATTERBOX_TURBO)
     # Chatterbox Turbo is English-only; its tool name via catalog:
-    assert english_tool, f"expected tool name for Chatterbox Turbo"
+    assert english_tool, "expected tool name for Chatterbox Turbo"
 
     # Pre-register BOTH tools as tracked ModelStates so we can
     # observe the flag flipping live (simulates a real RTM that has

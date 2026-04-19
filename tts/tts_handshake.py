@@ -75,7 +75,7 @@ _FALLBACK_LADDER: tuple[str, ...] = ("piper", "kokoro", "f5")
 # for the same pair.  Cleared explicitly by retry() / a backend swap.
 # ──────────────────────────────────────────────────────────────────────
 _cache_lock = threading.Lock()
-_cache: dict[tuple[str, str], "HandshakeResult"] = {}
+_cache: dict[tuple[str, str], HandshakeResult] = {}
 
 
 @dataclass
@@ -139,7 +139,7 @@ def _pick_greeting(lang: str | None) -> tuple[str, str]:
     isn't in the canonical GREETINGS dict.  Importing lazily so a
     broken core.constants doesn't crash the whole TTS stack.
     """
-    from core.constants import GREETINGS, GREETING_FALLBACK_LANG
+    from core.constants import GREETING_FALLBACK_LANG, GREETINGS
     if lang and lang in GREETINGS:
         return lang, GREETINGS[lang]
     return GREETING_FALLBACK_LANG, GREETINGS[GREETING_FALLBACK_LANG]

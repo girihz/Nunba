@@ -56,7 +56,7 @@ def _tree(path: str) -> ast.Module:
         f"expected audited TTS file missing: {path} — this guard can't "
         f"check for parallel dicts in a file that doesn't exist"
     )
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return ast.parse(f.read(), filename=path)
 
 
@@ -158,7 +158,7 @@ def test_no_inline_greeting_dict_in_nunba_tts():
 
 def test_canonical_greetings_exports_core_langs():
     """core.constants.GREETINGS must define en / ta / hi keys."""
-    from core.constants import GREETINGS, GREETING_FALLBACK_LANG
+    from core.constants import GREETING_FALLBACK_LANG, GREETINGS
     assert isinstance(GREETINGS, dict)
     for lang in ("en", "ta", "hi"):
         assert lang in GREETINGS, (
