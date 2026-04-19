@@ -68,6 +68,18 @@ jobs:
         run: python -m ruff format --check .
         continue-on-error: true  # Advisory — auto-format differences are not blocking
 
+      # config.json is .gitignored (it carries user-specific endpoints),
+      # but main.py + test_build_deploy_rules + test_hartos_wiring_invariants
+      # all assert it exists. The committed config.example.json has safe
+      # localhost defaults + env-var overrides — copy it in for CI.
+      - name: Seed config.json from config.example.json
+        shell: bash
+        run: |
+          if [ ! -f config.json ] && [ -f config.example.json ]; then
+            cp config.example.json config.json
+            echo "::notice title=config::seeded config.json from config.example.json"
+          fi
+
       # pytest: Backend unit tests (mocked — no running servers required)
       - name: Install test dependencies
         # pytest-timeout is required because the repo-root pytest.ini
