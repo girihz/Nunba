@@ -3078,16 +3078,48 @@ def _render_spa_index(build_dir: str):
     Used by every route that serves index.html (`/local`, the `/` SPA
     fallback, and the 404 handler) so the injected global is present
     regardless of which path the webview hit first.
+
+    Returns `None` if the SPA bundle is missing or unreadable.  When
+    returning None, logs a structured diagnostic so a failing frozen
+    install (e.g. LANDING_PAGE_BUILD_DIR resolved to the wrong path on
+    Program Files x86) is visible in `gui_app.log` / `server.log`
+    instead of silently falling back to a boot-stub page.
     """
     from flask import Response
     index_path = os.path.join(build_dir, 'index.html')
     if not os.path.exists(index_path):
+        # Diagnose: which build_dir was tried, what's in its parent, and
+        # whether the parent exists at all.  Don't spam on every request —
+        # use a module-level sentinel so we only log once per missing path.
+        try:
+            _miss_key = '_render_spa_index_missed_paths'
+            _missed = globals().setdefault(_miss_key, set())
+            if index_path not in _missed:
+                _missed.add(index_path)
+                _parent = os.path.dirname(index_path)
+                _exists_parent = os.path.isdir(_parent)
+                try:
+                    _contents = (os.listdir(_parent)[:20]
+                                 if _exists_parent else [])
+                except OSError:
+                    _contents = ['<listdir-failed>']
+                logging.warning(
+                    f"_render_spa_index: index.html NOT FOUND at {index_path} "
+                    f"(parent_exists={_exists_parent}, "
+                    f"parent_contents={_contents}). "
+                    f"Caller will fall back to placeholder HTML.",
+                )
+        except Exception:
+            pass
         return None
     try:
         with open(index_path, encoding='utf-8') as fh:
             html_text = fh.read()
     except Exception as e:
-        logging.warning(f"read index.html failed: {e}")
+        logging.warning(
+            f"_render_spa_index: read failed for {index_path}: "
+            f"{type(e).__name__}: {e}",
+        )
         return None
     html_text = _inject_guest_id_into_html(html_text)
     return Response(html_text, 200, content_type='text/html; charset=utf-8')
@@ -3502,63 +3534,134 @@ _splash('Initializing services...')
 # Deferred to background thread — chat routes are already registered above,
 # so the user can start chatting immediately. Social, agents, peer discovery
 # initialize in the background while the user is already interacting.
-# ── Register social blueprints synchronously (fast — just route registration) ──
-# The heavy init (DB, migrations, expert agents) is deferred to background.
-if HARTOS_BACKEND_DIRECT:
-    try:
-        init_social(app)  # registers gamification_bp, discovery_bp, admin_bp
-        from integrations.social.api import social_bp as _social_core_bp
-        app.register_blueprint(_social_core_bp)  # auth, users, posts, feed
-        logging.info("Social blueprints registered (routes available immediately)")
-    except Exception as _bp_err:
-        logging.warning(f"Social blueprint registration failed: {_bp_err}")
+#
+# ── CRITICAL: `init_social(app)` is NOT synchronous-safe (2026-04-19) ──
+# The HARTOS `init_social` implementation at integrations/social/__init__.py:329
+# calls `init_agent_engine(app)` unconditionally, which transitively pulls
+# autogen → openai → langchain → transformers → sympy.  In the frozen build
+# this import chain can take 4+ minutes due to import-lock contention with the
+# parallel `hartos-init` thread in `routes/hartos_backend_adapter.py`.
+# Symptom: `_bg_import` (the thread that calls `exec_module(main.py)`) stalls
+# for 240s+, `flask_app` never gets set, `_dynamic_wsgi_app` permanently
+# dispatches to the boot stub `gui_app`, and the user sees "Server is running.
+# App may have encountered an error" with 404s on the React bundle.
+#
+# Mitigation: ALL HARTOS blueprint registration (init_social, distributed
+# agent, kids routes, etc.) is now deferred to `_deferred_social_init()` below
+# so main.py's module-load finishes fast (<2s instead of 240s).  Frontend
+# endpoints that fire on first boot (/chat, /backend/health, /api/admin/config/chat,
+# /api/guest-id) are all defined directly on `app` above, so they work during
+# the deferred-init window.
+#
+# This is a functional change but NOT user-visible — the social UI was always
+# expected to lag behind chat-ready (see _deferred_social_init comment).
 
+
+def _has_bp(name: str) -> bool:
+    """Idempotency helper — True if a blueprint with this name is already
+    registered on `app`.  Used to guard against double-registration when the
+    deferred init path runs after any eager path that slipped through."""
     try:
-        from integrations.distributed_agent import distributed_agent_bp
-        app.register_blueprint(distributed_agent_bp)
+        return name in getattr(app, 'blueprints', {})
     except Exception:
-        pass
+        return False
 
-    try:
-        from routes import kids_media_routes
-        kids_media_routes.register_routes(app)
-    except Exception:
-        pass
 
+def _safe_register_bp(bp, *, name_hint: str = '') -> bool:
+    """Idempotent wrapper for `app.register_blueprint`.  Returns True if
+    the blueprint was registered this call, False if it was already present
+    (or registration raised)."""
     try:
-        from routes.kids_game_recommendation import kids_recommendation_bp
-        app.register_blueprint(kids_recommendation_bp)
-    except Exception:
-        pass
-
-    try:
-        from routes.upload_routes import register_upload_routes
-        register_upload_routes(app)
-    except Exception:
-        pass
-
-    try:
-        from routes.db_routes import register_db_routes
-        register_db_routes(app)
-    except Exception:
-        pass
-
-    # ── Register ALL HARTOS hive blueprints (marketplace, benchmarks, robotics, etc.) ──
-    try:
-        from integrations.blueprint_registry import register_all_blueprints
-        result = register_all_blueprints(app)
-        logging.info(f"HARTOS blueprints: {len(result['registered'])} registered, "
-                     f"{len(result['skipped'])} skipped: {result['registered']}")
-    except Exception as e:
-        logging.warning(f"HARTOS blueprint registry failed: {e}")
+        bp_name = getattr(bp, 'name', None) or name_hint
+        if bp_name and _has_bp(bp_name):
+            return False
+        app.register_blueprint(bp)
+        return True
+    except Exception as _bp_e:
+        logging.debug(f"blueprint {name_hint or getattr(bp, 'name', '?')} register failed: {_bp_e}")
+        return False
 
 
 def _deferred_social_init():
-    """Heavy social init in background — DB, migrations, channels, agents."""
+    """Heavy social init in background — blueprint registration, DB,
+    migrations, channels, agents.
+
+    Blueprint registration (init_social + social_bp + distributed_agent +
+    kids_media + upload + db + blueprint_registry) was moved here on
+    2026-04-19 after the HARTOS `init_social` was found to transitively pull
+    autogen/openai/langchain/transformers/sympy during its unconditional
+    `init_agent_engine(app)` call (HARTOS integrations/social/__init__.py:329).
+    Keeping those calls synchronous in main.py's module-load path stalled
+    `_bg_import` for 240s+ and never let `flask_app` reach the dispatcher.
+
+    Frontend boot-critical endpoints (/chat, /backend/health, /api/guest-id,
+    /api/admin/config/chat) are defined directly on `app` above main.py's
+    deferred-init block, so they answer correctly during this init window.
+    HARTOS social endpoints (/api/social/*) return 404 until this function
+    finishes — expected (frontend already silent-fails those calls)."""
     if not HARTOS_BACKEND_DIRECT:
         return
     try:
-        # DB + migrations (heavy I/O, safe to defer)
+        # ── 1) Blueprint registration (moved from module-load path) ──
+        # Each `if not _has_bp(...)` is an idempotency guard — if anything
+        # ever registers a blueprint eagerly in the future, we won't crash
+        # with "A blueprint named X is already registered".
+        try:
+            if init_social is not None:
+                init_social(app)  # registers gamification_bp, mcp_bp, sharing_bp,
+                                  # games_bp, discovery_bp, admin_bp, channel_user_bp,
+                                  # dashboard_bp, tracker_bp, fleet_update_bp,
+                                  # regional_host_bp, sync_bp, audit_bp, content_gen_bp,
+                                  # learning_bp, theme_bp, thought_experiments_bp,
+                                  # and (behind HEVOLVE_CODING_AGENT_ENABLED) the
+                                  # coding_agent.  ALSO pulls autogen+langchain via
+                                  # init_agent_engine — this is THE heavy call.
+            from integrations.social.api import social_bp as _social_core_bp
+            _safe_register_bp(_social_core_bp, name_hint='social')  # auth, users, posts, feed
+            logging.info("Social blueprints registered (deferred — routes available after this log line)")
+        except Exception as _bp_err:
+            logging.warning(f"Social blueprint registration failed: {_bp_err}")
+
+        try:
+            from integrations.distributed_agent import distributed_agent_bp
+            _safe_register_bp(distributed_agent_bp, name_hint='distributed_agent')
+        except Exception:
+            pass
+
+        try:
+            from routes import kids_media_routes
+            kids_media_routes.register_routes(app)
+        except Exception:
+            pass
+
+        try:
+            from routes.kids_game_recommendation import kids_recommendation_bp
+            _safe_register_bp(kids_recommendation_bp, name_hint='kids_recommendation')
+        except Exception:
+            pass
+
+        try:
+            from routes.upload_routes import register_upload_routes
+            register_upload_routes(app)
+        except Exception:
+            pass
+
+        try:
+            from routes.db_routes import register_db_routes
+            register_db_routes(app)
+        except Exception:
+            pass
+
+        # ── Register ALL HARTOS hive blueprints (marketplace, benchmarks, robotics, etc.) ──
+        try:
+            from integrations.blueprint_registry import register_all_blueprints
+            result = register_all_blueprints(app)
+            logging.info(f"HARTOS blueprints: {len(result['registered'])} registered, "
+                         f"{len(result['skipped'])} skipped: {result['registered']}")
+        except Exception as e:
+            logging.warning(f"HARTOS blueprint registry failed: {e}")
+
+        # ── 2) DB + migrations (heavy I/O, safe to defer) ──
         init_db()
         try:
             from integrations.social.migrations import run_migrations
@@ -3628,6 +3731,22 @@ def _deferred_social_init():
 
     except Exception as e:
         logging.warning(f"hart-backend direct init failed: {e}")
+
+    # ── Kick off HARTOS hart_intelligence import (Tier-1 direct dispatch) ──
+    # Previously this fired at module-load time of `routes/hartos_backend_adapter`
+    # (see that file's `start_hartos_init_background` docstring) and raced
+    # with `_bg_import` on langchain/transformers/torch import locks.  Now
+    # we spawn it HERE — after main.py is fully imported, blueprints are
+    # registered, and the Flask app is ready to answer requests.  This
+    # guarantees `flask_app` is set in app.py before the heavy import chain
+    # begins.  The user can already chat via fallback (Tier-3 local llama);
+    # Tier-1 comes online a few seconds later.
+    try:
+        from routes.hartos_backend_adapter import start_hartos_init_background
+        start_hartos_init_background()
+        logging.info("hartos-init background thread kicked off (deferred)")
+    except Exception as _hi_err:
+        logging.debug(f"start_hartos_init_background skipped: {_hi_err}")
 
     logging.info("Social subsystem initialized (background)")
 

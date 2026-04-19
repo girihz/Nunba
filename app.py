@@ -18,6 +18,81 @@ os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
 os.environ.setdefault('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS',
                        '--autoplay-policy=no-user-gesture-required')
 
+# ── Frozen-build code-hash short-circuit (2026-04-19) ──
+# `security.node_integrity.compute_code_hash` recursively walks every .py
+# file under the HARTOS install root to produce a SHA-256 manifest.  In a
+# cx_Freeze bundle, HARTOS is in `python-embed/Lib/site-packages/`, so the
+# default `_CODE_ROOT` (two parents above `node_integrity.py`) resolves to
+# `python-embed/Lib/` — which includes the entire CPython stdlib +
+# site-packages (10k+ .py files).  Startup_trace.log 2026-04-19 showed
+# 5+ parallel threads (peer_discovery, gossip, integrity_service) each
+# burning CPU on this walk during boot.
+#
+# In a frozen build the hash is cosmetic — peers only use it to see
+# "which build of the same code is this node running", and real tamper
+# resistance comes from Authenticode / installer signing.  Set a stable
+# precomputed value (SHA-256 of the executable path + install mtime) so
+# `compute_code_hash` short-circuits at Tier-1 and never walks.
+if getattr(sys, 'frozen', False):
+    try:
+        import hashlib as _h_cc
+        _exe = os.path.abspath(sys.executable)
+        try:
+            _exe_mtime = int(os.path.getmtime(_exe))
+        except OSError:
+            _exe_mtime = 0
+        _ch = _h_cc.sha256()
+        _ch.update(f"{_exe}|{_exe_mtime}".encode('utf-8'))
+        os.environ.setdefault('HEVOLVE_CODE_HASH_PRECOMPUTED', _ch.hexdigest())
+        del _h_cc, _exe, _exe_mtime, _ch
+    except Exception:
+        # If anything fails, leave unset — HARTOS will fall through to
+        # cache or full walk (slower but correct).
+        pass
+
+# ── G1 fix: Pre-warm torch under stock importer BEFORE _trace_import
+# (2026-04-19) ──
+#
+# CPython sets submodule-as-attribute on the parent only AFTER the
+# submodule's __init__.py returns (see `_handle_fromlist`).  torch 2.10.0's
+# __init__.py has this sequence:
+#     line 2240: from torch.autograd import (enable_grad, ...)
+#     line 2247: from torch import (__config__, ..., autograd, ..., nested, ...)
+#
+# The fromlist processing for `nested` triggers torch.nested/__init__.py,
+# which imports torch.nested._internal.nested_tensor, which evaluates
+# `class ViewBufferFromNested(torch.autograd.Function):` — an attribute
+# access on the PARTIALLY-INITIALIZED torch module.
+#
+# In dev .venv this works fine because __import__ is CPython's C fast path.
+# In frozen builds, our _trace_import wrapper (installed just below)
+# intercepts every __import__ including reentrant ones from inside torch,
+# and the wrapper indirection causes the attribute-set to lag by one frame.
+# By the time nested_tensor.py evaluates its class body, torch.autograd
+# attribute isn't bound yet -> AttributeError: partially initialized module
+# 'torch' has no attribute 'autograd' (most likely due to a circular import)
+#
+# Observed in logs/hartos_init_error.log on 2026-04-19T16:39 bundle with
+# torch 2.10.0+cpu.  Tier-1 (HARTOS in-process) failed to load, adapter
+# silently fell back to Tier-3 (llama.cpp) — which violates the product
+# requirement that Nunba always uses Tier-1.
+#
+# Fix: import torch + the two submodules that race
+# (autograd and nested) under the STOCK importer (C fast path)
+# BEFORE we install the wrapper.  Once torch is fully initialized, all
+# subsequent imports (including the langchain → transformers → torch
+# chain inside the hartos-init thread) get it from sys.modules cache
+# without re-executing torch/__init__.py.
+if getattr(sys, 'frozen', False):
+    try:
+        import torch  # noqa: F401  — full torch.__init__ under stock importer
+        import torch.autograd  # noqa: F401  — belt-and-braces: ensure attr bound
+        import torch.nested  # noqa: F401  — warm before wrapper sees it
+    except Exception:
+        # If torch isn't bundled or fails to import, don't crash app boot.
+        # The hartos-init thread will re-attempt and surface a clearer error.
+        pass
+
 # Trace recursion in frozen builds — write to file since Win32GUI has no console
 if getattr(sys, 'frozen', False):
     sys.setrecursionlimit(2000)
@@ -679,9 +754,21 @@ if getattr(sys, 'frozen', False):
     except Exception as _lc_e:
         _trace(f"  langchain fix exception at {_lc_time.time()-_lc_start:.3f}s: {type(_lc_e).__name__}: {_lc_e}")
     finally:
+        # Signal watchdog to exit, then briefly wait for it so we don't delete
+        # free variables (`_lc_done_flag`, `_lc_time`) while the daemon thread
+        # is mid-sleep — else a NameError is raised inside the thread once
+        # sleep(10) returns, polluting frozen_debug.log with stack traces.
+        # 2026-04-19: regression trapped in startup_trace.log.
         _lc_done_flag[0] = True
-        # watchdog thread is daemon — will exit on next sleep tick
-        del _lc_threading, _lc_time, _lc_watchdog, _lc_wd, _lc_start, _lc_done_flag
+        try:
+            _lc_wd.join(timeout=0.1)
+        except Exception:
+            pass
+        # Intentionally do NOT `del` closure free variables here.  The watchdog
+        # is a daemon thread; if it's still alive it will exit on next tick, and
+        # Python's module-scope garbage is negligible.  Deleting while the
+        # thread still holds module-global references is the crash pattern we
+        # just patched.
     _trace("langchain fixes done, starting torch pre-guard")
     # ── Pre-guard torch to prevent crash from broken native DLL ──
     # autogen → transformers → torch. In frozen builds, torch_cpu.dll can
@@ -874,8 +961,13 @@ def _run_frozen_import_fixes():
     except Exception:
         pass
     finally:
+        # Same fix as the module-level block: signal watchdog, wait briefly,
+        # DO NOT delete closure free vars while the daemon thread is mid-sleep.
         _lc_done_d[0] = True
-        del _lc_threading_d, _lc_time_d, _lc_watchdog_d, _lc_wd_d, _lc_start_d, _lc_done_d
+        try:
+            _lc_wd_d.join(timeout=0.1)
+        except Exception:
+            pass
     # torch pre-guard already ran at module level (subprocess + stub).
     # If _FROZEN_FIXES_DONE was False, the module-level block already handled torch.
     # No need to re-import here — the stub or real module is already in sys.modules.
