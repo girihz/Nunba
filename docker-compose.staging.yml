@@ -49,15 +49,21 @@ services:
       start_period: 90s
 
   # ---- Crossbar.io WAMP router on :8088 -----------------------------------
+  # Explicit config mount because `CROSSBAR_WEB_PORT` is NOT a standard env
+  # var the crossbario/crossbar image honours — the image reads
+  # /node/.crossbar/config.json unconditionally, which ships listening on
+  # 8080.  The 3m40s healthcheck hang on prior CI runs was because the
+  # container bound to 8080 while we probed 8088 → 20 retries × 10s + 30s
+  # start-period = failure.  Mounting our own config that explicitly
+  # binds to 8088 + realm `realm1` + anonymous role fixes both the port
+  # AND the handshake (without a realm/role, WAMP CONNECT fails).
   crossbar:
     image: crossbario/crossbar:latest
     container_name: nunba-staging-crossbar
     networks: [nunba-net]
     ports: ["8088:8088"]
-    # Crossbar's default .crossbar/config.json listens on :8080; we override
-    # to :8088 via env. No auth (staging-only, bridged network).
-    environment:
-      - CROSSBAR_WEB_PORT=8088
+    volumes:
+      - ./deploy/staging/crossbar_config.json:/node/.crossbar/config.json:ro
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import socket; s=socket.socket(); s.settimeout(2); s.connect((\"127.0.0.1\",8088))'"]
       interval: 10s
