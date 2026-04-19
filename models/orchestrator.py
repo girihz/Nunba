@@ -293,6 +293,80 @@ class TTSLoader(ModelLoader):
             return importlib.util.find_spec(pkg.replace('-', '_')) is not None
         return False
 
+    def validate(self, entry: ModelEntry) -> tuple:
+        """Canned TTS probe: synthesize the English greeting and verify
+        real audio came out (≥10KB + duration ≥0.5s).
+
+        Delegates to ``tts.tts_handshake.run_handshake`` — the SAME code
+        path that drives the first-run "Voice engine ready" banner, which
+        itself delegates to ``tts.verified_synth.verify_backend_synth``.
+        By reusing the canonical handshake we keep ONE definition of
+        "what counts as a real TTS signal":
+
+            install-validation here  ─┐
+                                      ├─► run_handshake(engine, backend,
+            first-run banner flip ────┤      lang='en', broadcast=False,
+                                      │      play_audio=False)
+            "Retry" + swap-backend ───┘
+
+        Any future tightening of the bar (e.g. phonetic-similarity,
+        SNR floor) lands in run_handshake once and every checkpoint
+        inherits it — no parallel probe to drift.
+
+        Deterministic input (canonical ``GREETINGS['en']`` phrase from
+        ``core.constants``), runs in-process (no network egress, no user
+        PII in the synth text), ``broadcast=False`` so the probe doesn't
+        emit SSE events to the UI, ``play_audio=False`` so the install
+        machine doesn't beep.  Invalidates any stale handshake cache for
+        this backend first so a pre-install negative verdict doesn't
+        spuriously fail the fresh probe.
+
+        Returns:
+            (True,  'synthesized {bytes}B, {duration:.2f}s') on pass
+            (False, reason) on fail
+        """
+        backend_name = self._backend_name(entry)
+        try:
+            from tts.tts_engine import get_tts_engine
+            from tts.tts_handshake import invalidate, run_handshake
+        except ImportError as e:
+            return (False, f'TTS imports failed: {e}')
+
+        try:
+            engine = get_tts_engine()
+        except Exception as e:
+            return (False, f'get_tts_engine raised: {e}')
+
+        # Clear any stale handshake verdict for this backend so the
+        # post-install probe reflects the FRESHLY-LOADED state, not a
+        # pre-install cached failure (e.g. from when the backend's
+        # packages weren't yet present).
+        try:
+            invalidate(backend_name)
+        except Exception:
+            pass
+
+        try:
+            result = run_handshake(
+                engine, backend_name, lang='en',
+                broadcast=False, play_audio=False,
+                timeout_s=60,
+            )
+        except Exception as e:
+            return (False, f'run_handshake raised: {e}')
+
+        if not result.ok:
+            return (False, f'handshake failed: {result.err}')
+
+        logger.info(
+            f"TTS validate OK for {entry.id}: "
+            f"{result.n_bytes}B, {result.duration_s:.2f}s"
+        )
+        return (
+            True,
+            f'synthesized {result.n_bytes}B, {result.duration_s:.2f}s'
+        )
+
 
 class STTLoader(ModelLoader):
     """Loader for STT models (faster-whisper, lazy-loaded on first use)."""

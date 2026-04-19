@@ -332,6 +332,124 @@ class TestTTSLoader:
             loader.load(entry, 'gpu')
         mock_engine._can_run_backend.assert_called_with('chatterbox-turbo')
 
+    # ── validate() — L1.2 capability probe ──────────────────────────
+    def _mock_handshake_modules(self, handshake_result, engine=None):
+        """Wire mocked tts.tts_engine and tts.tts_handshake into sys.modules.
+
+        Returns (mock_tts_engine, mock_handshake) so assertions can
+        introspect invalidate() calls and run_handshake() call args.
+        """
+        mock_tts_engine = MagicMock()
+        mock_tts_engine.get_tts_engine = MagicMock(return_value=engine or MagicMock())
+        mock_handshake = MagicMock()
+        mock_handshake.run_handshake = MagicMock(return_value=handshake_result)
+        mock_handshake.invalidate = MagicMock()
+        return (
+            mock_tts_engine,
+            mock_handshake,
+            {
+                'tts.tts_engine': mock_tts_engine,
+                'tts.tts_handshake': mock_handshake,
+            },
+        )
+
+    def test_validate_success_passes_bytes_and_duration(self):
+        """A successful handshake → (True, 'synthesized NB, Ns')."""
+        loader = TTSLoader()
+        entry = _make_entry(id='tts-piper', model_type='tts')
+        result = SimpleNamespace(ok=True, n_bytes=24_576, duration_s=1.23, err='')
+        _, mock_hs, modules = self._mock_handshake_modules(result)
+        with patch.dict('sys.modules', modules):
+            ok, reason = loader.validate(entry)
+        assert ok is True
+        assert '24576' in reason
+        assert '1.23' in reason
+        mock_hs.run_handshake.assert_called_once()
+        # The probe MUST use the canonical handshake — broadcast=False
+        # so no SSE event fires, play_audio=False so install machine
+        # doesn't beep, lang='en' per probe contract.
+        kwargs = mock_hs.run_handshake.call_args.kwargs
+        assert kwargs.get('lang') == 'en'
+        assert kwargs.get('broadcast') is False
+        assert kwargs.get('play_audio') is False
+
+    def test_validate_failure_surfaces_handshake_err(self):
+        """A failed handshake → (False, 'handshake failed: <err>')."""
+        loader = TTSLoader()
+        entry = _make_entry(id='tts-f5-tts', model_type='tts')
+        result = SimpleNamespace(
+            ok=False, n_bytes=0, duration_s=0.0,
+            err='synthesis produced no audio',
+        )
+        _, _, modules = self._mock_handshake_modules(result)
+        with patch.dict('sys.modules', modules):
+            ok, reason = loader.validate(entry)
+        assert ok is False
+        assert 'synthesis produced no audio' in reason
+
+    def test_validate_invalidates_cache_before_run(self):
+        """Install-validation must clear any stale handshake cache first,
+        so a pre-install negative verdict doesn't spuriously fail the
+        freshly-loaded backend's probe.
+        """
+        loader = TTSLoader()
+        entry = _make_entry(id='tts-chatterbox-turbo', model_type='tts')
+        result = SimpleNamespace(ok=True, n_bytes=12_345, duration_s=0.6, err='')
+        _, mock_hs, modules = self._mock_handshake_modules(result)
+        with patch.dict('sys.modules', modules):
+            loader.validate(entry)
+        mock_hs.invalidate.assert_called_once_with('chatterbox-turbo')
+
+    def test_validate_returns_false_on_import_failure(self):
+        """tts.tts_handshake missing → (False, 'TTS imports failed: ...')."""
+        loader = TTSLoader()
+        entry = _make_entry(id='tts-piper', model_type='tts')
+        # Block the import entirely.
+        import builtins
+        real_import = builtins.__import__
+
+        def _broken(name, *a, **kw):
+            if name == 'tts.tts_handshake':
+                raise ImportError('module missing')
+            return real_import(name, *a, **kw)
+
+        with patch.object(builtins, '__import__', _broken):
+            ok, reason = loader.validate(entry)
+        assert ok is False
+        assert 'TTS imports failed' in reason
+
+    def test_validate_returns_false_on_handshake_raising(self):
+        """run_handshake raising → (False, 'run_handshake raised: ...')."""
+        loader = TTSLoader()
+        entry = _make_entry(id='tts-f5-tts', model_type='tts')
+        mock_tts_engine = MagicMock()
+        mock_tts_engine.get_tts_engine = MagicMock(return_value=MagicMock())
+        mock_hs = MagicMock()
+        mock_hs.run_handshake = MagicMock(side_effect=RuntimeError('boom'))
+        mock_hs.invalidate = MagicMock()
+        modules = {
+            'tts.tts_engine': mock_tts_engine,
+            'tts.tts_handshake': mock_hs,
+        }
+        with patch.dict('sys.modules', modules):
+            ok, reason = loader.validate(entry)
+        assert ok is False
+        assert 'run_handshake raised' in reason
+        assert 'boom' in reason
+
+    def test_validate_uses_backend_name_without_tts_prefix(self):
+        """The handshake gets the stripped backend name, matching the
+        ENGINE_REGISTRY keys (e.g. 'piper', not 'tts-piper')."""
+        loader = TTSLoader()
+        entry = _make_entry(id='tts-indic-parler', model_type='tts')
+        result = SimpleNamespace(ok=True, n_bytes=15_000, duration_s=0.8, err='')
+        _, mock_hs, modules = self._mock_handshake_modules(result)
+        with patch.dict('sys.modules', modules):
+            loader.validate(entry)
+        args, kwargs = mock_hs.run_handshake.call_args
+        # backend is the 2nd positional arg to run_handshake(engine, backend, ...)
+        assert args[1] == 'indic-parler'
+
 
 # ===========================================================================
 # 5. STTLoader
