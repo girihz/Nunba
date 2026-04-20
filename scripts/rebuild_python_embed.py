@@ -70,6 +70,248 @@ def run(cmd, **kwargs):
     return result
 
 
+def _query_embed_abi_tag(python_exe):
+    """Return the CPython ABI tag of python-embed, e.g. 'cp312'."""
+    result = subprocess.run(
+        [python_exe, "-c",
+         "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _scan_pyd_abis(pkg_dir):
+    """Walk pkg_dir and classify every *.pyd by its ABI tag.
+
+    Returns (by_tag, untagged) where by_tag maps 'cp312' -> [paths...] and
+    untagged is the list of .pyd files without a recognizable ABI suffix.
+    """
+    import re
+    tag_re = re.compile(r'\.(cp\d+)-win_amd64\.pyd$')
+    by_tag = {}
+    untagged = []
+    for root, _dirs, files in os.walk(pkg_dir):
+        for fname in files:
+            if not fname.endswith('.pyd'):
+                continue
+            path = os.path.join(root, fname)
+            m = tag_re.search(fname)
+            if m:
+                by_tag.setdefault(m.group(1), []).append(path)
+            else:
+                untagged.append(path)
+    return by_tag, untagged
+
+
+def _find_matching_host_python(target_tag):
+    """Locate a FULL CPython install (with include/ and libs/) matching target_tag.
+
+    python-embed is a minimal runtime — it ships WITHOUT Python.h and
+    python3XX.lib, so it cannot compile C extensions.  To rebuild HevolveAI's
+    Cython extensions we need a full host Python install at the same
+    version as python-embed (so the resulting .pyd ABI tag matches).
+
+    Search order:
+      1. `sys.executable` if its version matches target_tag.
+      2. Python Launcher (`py -<major.minor>`), the default Windows
+         installation flow.
+
+    Returns absolute path to python.exe, or None.  None triggers an
+    abort with clear instructions — automatic rebuild is not possible
+    without a matching full Python install.
+    """
+    import re
+    m = re.match(r'cp(\d)(\d+)$', target_tag)
+    if not m:
+        return None
+    major, minor = int(m.group(1)), int(m.group(2))
+
+    def _has_build_headers(pyexe):
+        # A full CPython install puts Python.h at <prefix>/include/Python.h
+        # and python3XX.lib at <prefix>/libs/python3XX.lib.  python-embed
+        # skips both, which is how we distinguish embed from full install.
+        base = os.path.dirname(pyexe)
+        return (os.path.isfile(os.path.join(base, "include", "Python.h")) and
+                os.path.isdir(os.path.join(base, "libs")))
+
+    # 1. Self, if version matches.
+    if sys.version_info.major == major and sys.version_info.minor == minor:
+        if _has_build_headers(sys.executable):
+            return sys.executable
+
+    # 2. Windows `py` launcher — resolves e.g. `py -3.12` to the registered
+    # Python 3.12 install, which is a full install (include/ + libs/) by
+    # default.  Stdin must be closed to prevent py.exe from blocking on
+    # interactive prompts (it can prompt if no matching version exists).
+    try:
+        r = subprocess.run(
+            ["py", f"-{major}.{minor}", "-c",
+             "import sys; print(sys.executable)"],
+            capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL,
+        )
+        if r.returncode == 0:
+            candidate = r.stdout.strip()
+            if candidate and os.path.isfile(candidate) and _has_build_headers(candidate):
+                return candidate
+    except (OSError, subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    return None
+
+
+def _rebuild_hevolveai_cython(python_exe, hevolveai_src):
+    """Rebuild HevolveAI's Cython extensions with python-embed's ABI.
+
+    HevolveAI's MANIFEST.in copies .pyd files into the install as-is (no
+    Cython recompile), so whatever ABI they were built under is the ABI
+    that lands in python-embed.  If that doesn't match python-embed's
+    Python version, every compiled submodule fails to load at runtime
+    with `DLL load failed` (the missing DLL is the wrong-version
+    python3XX.dll).  Rebuilding in-place here before `pip install`
+    guarantees alignment.
+
+    Build interpreter selection:
+      - We CANNOT use python-embed itself — it lacks include/ + libs/
+        needed for C extension compilation.
+      - We locate a FULL CPython install at the same major.minor via
+        _find_matching_host_python().  Its ABI tag matches python-embed.
+
+    Build isolation:
+      - A scratch venv at <hevolveai_src>/_build_venv_<tag>/ avoids
+        polluting the host Python's site-packages with build-time deps
+        (cython, setuptools, wheel).  The venv is removed on success.
+
+    If MSVC Build Tools are absent the Cython compile step WILL fail.
+    We surface a clear remediation message rather than let the build
+    continue and emit a broken Nunba bundle.
+    """
+    target_tag = _query_embed_abi_tag(python_exe)
+    if not target_tag:
+        print("  WARN: could not query python-embed ABI tag; skipping rebuild")
+        return
+
+    pkg_dir = os.path.join(hevolveai_src, "src", "hevolveai")
+    if not os.path.isdir(pkg_dir):
+        print(f"  NOTE: {pkg_dir} not found — hevolveai may be pure-Python; skipping")
+        return
+
+    # Pre-scan: what ABIs are currently present?
+    by_tag, _untagged = _scan_pyd_abis(pkg_dir)
+    pre_counts = {tag: len(paths) for tag, paths in by_tag.items()}
+    print(f"  Target ABI: .{target_tag}-win_amd64.pyd")
+    print(f"  Current .pyd counts by ABI: {pre_counts or 'none'}")
+
+    # Early-out: if every .pyd already matches and there are no stragglers,
+    # skip the expensive rebuild.  This makes reruns cheap.
+    if pre_counts.get(target_tag, 0) > 0 and len(pre_counts) == 1:
+        print(f"  All {pre_counts[target_tag]} .pyd files already match target ABI; skipping rebuild")
+        return
+
+    # Locate a build interpreter — needs full include/ + libs/.
+    build_python = _find_matching_host_python(target_tag)
+    if not build_python:
+        py_ver = f"{target_tag[2]}.{target_tag[3:]}"  # cp312 -> 3.12
+        print(f"  ERROR: no full CPython {py_ver} install found on host.")
+        print(f"         A full install (with include/ + libs/) is required to")
+        print(f"         rebuild HevolveAI's Cython extensions for the target ABI.")
+        print("")
+        print(f"  FIX: install Python {py_ver} from python.org (NOT the embeddable")
+        print(f"       zip — that one lacks headers), then re-run this script.")
+        print(f"       Or make sure `py -{py_ver}` resolves to your Python {py_ver}.")
+        sys.exit(1)
+    print(f"  Build interpreter: {build_python}")
+
+    # Delete stale .pyd files from the source tree that DON'T match target ABI.
+    # Without this, `pip install` would copy them anyway (MANIFEST grabs
+    # everything that ends in .pyd), bloating python-embed with dead weight
+    # AND making it harder to spot if the rebuild silently did nothing.
+    removed = 0
+    for tag, paths in by_tag.items():
+        if tag == target_tag:
+            continue
+        for path in paths:
+            try:
+                os.remove(path)
+                removed += 1
+            except OSError as e:
+                print(f"  WARN: could not delete stale {os.path.basename(path)}: {e}")
+    if removed:
+        print(f"  Removed {removed} stale .pyd files with non-{target_tag} ABI")
+
+    # Scratch venv for build-time deps.  Isolates cython/setuptools/wheel
+    # from the host Python's site-packages.  Named after the ABI tag so
+    # concurrent builds for different targets don't clobber each other.
+    venv_dir = os.path.join(hevolveai_src, f"_build_venv_{target_tag}")
+    if os.path.isdir(venv_dir):
+        print(f"  Reusing existing build venv: {venv_dir}")
+    else:
+        print(f"  Creating build venv: {venv_dir}")
+        venv_result = run(
+            [build_python, "-m", "venv", venv_dir],
+            capture_output=True, text=True, timeout=120,
+        )
+        if venv_result.returncode != 0:
+            print("  ERROR: venv creation failed.")
+            print(f"  stderr: {(venv_result.stderr or '')[:400]}")
+            sys.exit(1)
+
+    venv_python = os.path.join(venv_dir, "Scripts", "python.exe")
+    if not os.path.isfile(venv_python):
+        print(f"  ERROR: venv python not at expected path: {venv_python}")
+        sys.exit(1)
+
+    # Install build-time deps into the venv.
+    print("  Installing Cython/setuptools/wheel into build venv...")
+    cy_install = run(
+        [venv_python, "-m", "pip", "install",
+         "cython", "setuptools", "wheel",
+         "--no-warn-script-location"],
+        capture_output=True, text=True, timeout=180,
+    )
+    if cy_install.returncode != 0:
+        print("  ERROR: Cython install failed; rebuild cannot proceed.")
+        print(f"  pip stderr: {(cy_install.stderr or '')[:400]}")
+        sys.exit(1)
+
+    # Run the rebuild.  Long timeout — setup_cython.py compiles ~150 files;
+    # MSVC cl.exe is slow on Windows.  30 minutes is generous but bounded.
+    # The venv python matches python-embed's major.minor, so the .pyd tags
+    # produced here will match python-embed's ABI.
+    print(f"  Rebuilding Cython extensions in {pkg_dir} ...")
+    build_result = run(
+        [venv_python, "setup_cython.py"],
+        cwd=hevolveai_src,
+        timeout=1800,
+    )
+    if build_result.returncode != 0:
+        print("  ERROR: HevolveAI Cython rebuild FAILED.")
+        print("  Most likely cause: MSVC Build Tools missing.")
+        print("  Fix: install 'Desktop development with C++' from:")
+        print("       https://visualstudio.microsoft.com/visual-cpp-build-tools/")
+        print("  Then re-run this script.")
+        sys.exit(1)
+
+    # Post-scan: verify new .pyd landed for target ABI.
+    by_tag_post, _ = _scan_pyd_abis(pkg_dir)
+    post_match = len(by_tag_post.get(target_tag, []))
+    if post_match == 0:
+        print(f"  ERROR: rebuild produced zero .{target_tag}-win_amd64.pyd files.")
+        print("  Something is wrong with setup_cython.py — check its output above.")
+        sys.exit(1)
+    print(f"  Rebuild OK: {post_match} .{target_tag}-win_amd64.pyd files present")
+
+    # Spot-check a critical submodule that frame_store.py relies on.
+    canary = os.path.join(pkg_dir, "embodied_ai", "utils",
+                          f"visual_encoding.{target_tag}-win_amd64.pyd")
+    if not os.path.isfile(canary):
+        print(f"  WARN: canary {os.path.basename(canary)} missing after rebuild.")
+        print("  frame_store.try_import_hevolveai_names() will fall back to numpy.")
+    else:
+        print(f"  Canary present: {os.path.relpath(canary, hevolveai_src)}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Rebuild python-embed for cx_Freeze runtime parity"
@@ -190,8 +432,29 @@ def main():
     # 7. Install HevolveAI (Continual Learner) — MUST come before hart-backend
     #    hart-backend declares `embodied-ai @ git+...` as a dependency;
     #    pre-installing from local avoids the private git fetch.
-    step("7a. Installing HevolveAI (Embodied Continual Learner With Hiveintelligence)")
     hevolveai_src = HEVOLVEAI_SRC if os.path.isdir(HEVOLVEAI_SRC) else None
+
+    # 7a-prebuild: Align HevolveAI .pyd ABI with python-embed.
+    #
+    # HevolveAI ships as Cython-compiled binaries.  Its MANIFEST.in is:
+    #     recursive-exclude src *.py
+    #     recursive-include src *.pyd
+    # so `pip install <hevolveai_src>` copies the pre-built .pyd files AS-IS
+    # and does NOT rebuild them.  If those .pyd were built under Python 3.11
+    # (e.g. someone ran build_hevolveai.bat with conda's 3.11 on PATH), they
+    # arrive in python-embed tagged `.cp311-win_amd64.pyd` — and the bundled
+    # Python 3.12 silently refuses to load them.  Failure mode at Nunba
+    # runtime: `ImportError: DLL load failed while importing visual_encoding`
+    # (python311.dll is not bundled).  The frame_store.py fallback to numpy
+    # makes the damage invisible: HevolveAI's visual encoder is just gone.
+    #
+    # Fix: ALWAYS rebuild the Cython extensions using python-embed's own
+    # python.exe right before install.  Tag is guaranteed to match.
+    if hevolveai_src:
+        step("7a-prebuild. Rebuilding HevolveAI Cython extensions with target ABI")
+        _rebuild_hevolveai_cython(python_exe, hevolveai_src)
+
+    step("7a. Installing HevolveAI (Embodied Continual Learner With Hiveintelligence)")
     if hevolveai_src:
         run([python_exe, "-m", "pip", "install", hevolveai_src,
              "--no-warn-script-location", "--no-deps"], timeout=120)
@@ -297,20 +560,36 @@ _inject_path(_lib_dir, front=False)
     else:
         print(f"  FAIL: torch._C still broken: {result.stderr[:300]}")
 
-    # Verify HevolveAI (Continual Learner)
-    result = run([python_exe, "-c",
-                  "from hevolveai import WorldModelBridge; print('HevolveAI OK')"],
-                 capture_output=True, text=True)
-    if result.returncode == 0:
-        print(f"  PASS: {result.stdout.strip()}")
-    else:
-        # Try alternate import path
-        result2 = run([python_exe, "-c", "import hevolveai; print('HevolveAI package OK')"],
-                      capture_output=True, text=True)
-        if result2.returncode == 0:
-            print(f"  PASS: {result2.stdout.strip()}")
+    # Verify HevolveAI (Continual Learner).
+    #
+    # We specifically import a SUBMODULE that's backed by a Cython .pyd
+    # (visual_encoding), not just the top-level `hevolveai` package.  The
+    # package is mostly an __init__.pyd which can load even when the rest
+    # of the ABI is wrong — that's the exact trap we fell into before
+    # (top-level import succeeded but every submodule failed with
+    # `DLL load failed while importing visual_encoding` at Nunba runtime).
+    # If any of these canaries fail, the bundle is unusable — abort.
+    canaries = [
+        "hevolveai",
+        "hevolveai.embodied_ai.utils.visual_encoding",
+        "hevolveai.embodied_ai.learning.temporal_coherence",
+        "hevolveai.embodied_ai.memory.episodic_memory",
+    ]
+    for mod in canaries:
+        r = run([python_exe, "-c", f"import {mod}; print('{mod} OK')"],
+                capture_output=True, text=True)
+        if r.returncode == 0:
+            print(f"  PASS: {r.stdout.strip()}")
         else:
-            print(f"  WARN: HevolveAI import failed: {result.stderr[:200]}")
+            err = (r.stderr or "")[:400]
+            print(f"  FAIL: {mod}: {err}")
+            print("")
+            print("  HevolveAI submodule import failed — the bundled Nunba app")
+            print("  WILL fall back to numpy for every visual encoding call and")
+            print("  silently degrade.  Cython .pyd ABI is most likely wrong.")
+            print(f"  Check: look for .cp*-win_amd64.pyd files in python-embed/")
+            print(f"         Lib/site-packages/hevolveai/ whose ABI tag != cp312.")
+            sys.exit(1)
 
     # Verify hart-backend
     result = run([python_exe, "-c",
