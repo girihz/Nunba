@@ -58,6 +58,28 @@ jobs:
           token: ${{ secrets.HEVOLVE_REPO_TOKEN || github.token }}
         continue-on-error: true
 
+      - name: Verify sibling repos cloned (fail fast with actionable error)
+        shell: bash
+        run: |
+          # Since 2026-04-02: build.yml silently fails because default
+          # GITHUB_TOKEN lacks repo:read on private hertz-ai repos, so
+          # the sibling Checkout steps (continue-on-error: true) no-op,
+          # and the real failure surfaces 3 steps later as
+          # "ModuleNotFoundError: No module named 'sql'" which is
+          # opaque to anyone not knowing the setup.  Fail here with
+          # the fix path instead.
+          missing=()
+          for repo in HARTOS hevolveai Hevolve_Database; do
+            if [ ! -d "_deps/$repo" ] || [ -z "$(ls -A "_deps/$repo" 2>/dev/null)" ]; then
+              missing+=("$repo")
+            fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error title=Sibling repos missing::The private sibling repos [${missing[*]}] did not clone. This means default GITHUB_TOKEN lacks repo:read access to hertz-ai/* private repos. Add a HEVOLVE_REPO_TOKEN secret (PAT with repo:read scope) to repository settings. Until the secret is set, the Nunba installer build cannot complete \u2014 build-windows will fail on 'import sql', build-linux will fail on AppImage + hevolve-database install."
+            echo "Missing sibling repos: ${missing[*]}"
+            exit 1
+          fi
+
       - name: Link sibling repos
         shell: bash
         run: |
