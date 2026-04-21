@@ -21,6 +21,13 @@ on:
         default: 'false'
         type: boolean
 
+# Cancel in-progress runs on rapid pushes — regression is a 150min
+# job, so duplicate-run cost is 5+ hours of runner time per
+# re-push.  quality.yml + defect-harness.yml already have this group.
+concurrency:
+  group: regression-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   regression:
     name: all-tiers / ${{ matrix.os }}

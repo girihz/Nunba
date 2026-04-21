@@ -7,6 +7,14 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
+# Cancel in-progress runs when a new push lands on the same ref.
+# Prevents the duplicate-run on rapid pushes problem that was
+# chewing through runner minutes + made CI signal noisy.  quality.yml
+# already has the equivalent group; this matches that pattern.
+concurrency:
+  group: defect-harness-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   harness:
     name: harness / ${{ matrix.os }} / py${{ matrix.python-version }}
