@@ -4,6 +4,33 @@ main.py -- Nunba Server
 A Friend, A Well Wisher, Your LocalMind
 Connect to Hivemind to collaborate with your friends' agents.
 """
+# torch.__spec__ post-facto patch.
+# app.py's frozen-build torch stub installs sys.modules['torch'] =
+# types.ModuleType() with __spec__ = None, which makes Py 3.12
+# importlib.util.find_spec('torch') raise ValueError.  The upstream
+# fix is in app.py:980 (commit 2fbcca98) but this post-facto patch
+# keeps BOTH paths working when main.py is loaded after a stub install
+# from an older bundled app.py.  Safe to run even when the source is
+# already patched (no-ops if __spec__ is already set).
+import sys as _s_spec
+try:
+    from importlib.machinery import ModuleSpec as _MS_spec
+    for _mod_name in ('torch', 'torch.autograd', 'torch.cuda',
+                      'torch.nn', 'torch.nn.functional'):
+        _m = _s_spec.modules.get(_mod_name)
+        if _m is not None and getattr(_m, '__spec__', None) is None:
+            try:
+                _m.__spec__ = _MS_spec(
+                    name=_mod_name, loader=None, origin='frozen_stub',
+                    is_package=_mod_name in ('torch', 'torch.nn'),
+                )
+                if _mod_name == 'torch':
+                    _m.__spec__.submodule_search_locations = []
+            except Exception:
+                pass
+except Exception:
+    pass
+
 # WMI-hang prevention (MUST BE FIRST).
 # platform.uname/node/system/release/version on Windows funnel through
 # _wmi_query which hangs 60s+ when WMI is busy (Defender). Populate
