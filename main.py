@@ -2040,12 +2040,48 @@ def admin_models_hub_search():
         }
         if filt.get('pipeline_tag'):
             kwargs['pipeline_tag'] = filt['pipeline_tag']
-        if filt.get('library'):
-            kwargs['library'] = filt['library']
-        if lang:
-            kwargs['language'] = lang
         if search:
             kwargs['search'] = search
+
+        # ── huggingface_hub compat shim ──
+        # HF < 1.0 exposed dedicated per-facet kwargs (library=, language=,
+        # tags=, task=).  HF >= 1.0 (bundled version in Nunba python-embed
+        # as of 2026-04-20 is 1.4.1) removed all of them and consolidated
+        # every facet into a single `filter=` parameter that takes str or
+        # Iterable[str].  Passing `library=` to the new API raises
+        # TypeError: `HfApi.list_models() got an unexpected keyword argument
+        # 'library'`, which is the regression observed on /api/admin/models/
+        # hub/search.  Detect the installed API via `inspect.signature` and
+        # route library + language into whichever channel the installed
+        # version accepts.
+        import inspect as _insp
+        _lm_params = _insp.signature(list_models).parameters
+        _supports_library_kw = 'library' in _lm_params
+        _supports_language_kw = 'language' in _lm_params
+        _supports_filter_kw = 'filter' in _lm_params
+
+        _filter_terms: list = []
+        if filt.get('library'):
+            lib_val = filt['library']
+            if _supports_library_kw:
+                kwargs['library'] = lib_val
+            elif _supports_filter_kw:
+                if isinstance(lib_val, (list, tuple)):
+                    _filter_terms.extend(lib_val)
+                else:
+                    _filter_terms.append(lib_val)
+
+        if lang:
+            if _supports_language_kw:
+                kwargs['language'] = lang
+            elif _supports_filter_kw:
+                _filter_terms.append(lang)
+
+        if _filter_terms and _supports_filter_kw:
+            # Pass as single str when only one term (HF 1.x accepts both
+            # str and Iterable[str], but str avoids a potential wrapper
+            # round-trip for the common case).
+            kwargs['filter'] = _filter_terms[0] if len(_filter_terms) == 1 else _filter_terms
 
         models = list(list_models(**kwargs))
         # Build minimal payload — don't leak full HF metadata blobs
@@ -3642,6 +3678,48 @@ def _safe_register_bp(bp, *, name_hint: str = '') -> bool:
         return False
 
 
+def _unlock_flask_setup_lock(flask_app) -> bool:
+    """Flask 2.3+ freezes setup methods (register_blueprint, before_request,
+    after_request, errorhandler, ...) after the first request is served:
+
+        RuntimeError: The setup method '<name>' can no longer be called on the
+        application. It has already handled its first request, any changes
+        will not be applied consistently.
+
+    Nunba's deferred-init path (`_deferred_social_init`) runs AFTER Flask has
+    already answered /chat, /backend/health, etc., so every blueprint that
+    it tries to register — `social_bp`, `hive_session`, `hive_signals`,
+    `gamification_bp`, and every other HARTOS surface — silently fails with
+    that RuntimeError, which is why `/api/social/posts` returns 404.
+
+    This helper resets the internal `_got_first_request` flag (Flask < 2.3)
+    and, for Flask >= 2.3, resets the `_got_first_request` attribute the Flask
+    `setupmethod` decorator inspects. The unlock is safe because:
+
+      * the deferred init only APPENDS blueprints and before_request hooks;
+      * /chat, /backend/health, /api/admin/config/chat are already defined
+        and served — they don't get re-defined here;
+      * register_blueprint is idempotent via _safe_register_bp.
+
+    Returns True if the lock was released (or was never engaged), False if
+    the Flask internals changed in a way we can't unlock.
+    """
+    try:
+        # Flask < 2.3 (still present as a fallback attr in 2.3+)
+        setattr(flask_app, '_got_first_request', False)
+        # Flask 2.3+ moved the lock onto the inner Flask object's
+        # `_got_first_request` attribute, which the setupmethod() decorator
+        # reads. Resetting both covers the version matrix.
+        try:
+            flask_app._got_first_request = False  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        return True
+    except Exception as _unlock_e:
+        logging.debug(f"Flask setup-lock release skipped: {_unlock_e}")
+        return False
+
+
 def _deferred_social_init():
     """Heavy social init in background — blueprint registration, DB,
     migrations, channels, agents.
@@ -3661,26 +3739,45 @@ def _deferred_social_init():
     finishes — expected (frontend already silent-fails those calls)."""
     if not HARTOS_BACKEND_DIRECT:
         return
+
+    # ── 0) Release Flask's first-request setup lock ──────────────────────
+    # Flask 2.3+ blocks register_blueprint / before_request after the first
+    # request is served.  Because this function runs AFTER /chat and
+    # /backend/health have already answered, every downstream register_*
+    # call would raise RuntimeError.  `_unlock_flask_setup_lock` resets the
+    # internal `_got_first_request` flag so deferred registrations land.
+    _unlock_flask_setup_lock(app)
+
     try:
-        # ── 1) Blueprint registration (moved from module-load path) ──
-        # Each `if not _has_bp(...)` is an idempotency guard — if anything
-        # ever registers a blueprint eagerly in the future, we won't crash
-        # with "A blueprint named X is already registered".
+        # ── 1a) Heavy HARTOS init_social (registers gamification/mcp/sharing
+        # /games/discovery/admin/channel_user/dashboard/tracker/fleet_update/
+        # regional_host/sync/audit/content_gen/learning/theme/thought_experiments
+        # /coding_agent blueprints; ALSO pulls autogen+langchain via
+        # init_agent_engine — this is THE heavy call and can fail on its
+        # own without blocking `social_bp`).
         try:
             if init_social is not None:
-                init_social(app)  # registers gamification_bp, mcp_bp, sharing_bp,
-                                  # games_bp, discovery_bp, admin_bp, channel_user_bp,
-                                  # dashboard_bp, tracker_bp, fleet_update_bp,
-                                  # regional_host_bp, sync_bp, audit_bp, content_gen_bp,
-                                  # learning_bp, theme_bp, thought_experiments_bp,
-                                  # and (behind HEVOLVE_CODING_AGENT_ENABLED) the
-                                  # coding_agent.  ALSO pulls autogen+langchain via
-                                  # init_agent_engine — this is THE heavy call.
+                init_social(app)
+                logging.info("HARTOS init_social() completed")
+        except Exception as _init_err:
+            logging.warning(f"HARTOS init_social() failed (non-fatal; social_bp will still register): {_init_err}")
+
+        # ── 1b) Core social_bp (auth, users, posts, feed, comments) ──
+        # MUST register independently of init_social(): the whole frontend
+        # social experience depends on /api/social/posts, /api/social/feed,
+        # /api/social/auth/register, /api/social/auth/login, etc.  Previous
+        # regression: this was nested inside the same try as init_social,
+        # so when init_social raised RuntimeError after the setup-lock bit,
+        # social_bp never registered and every /api/social/* returned 404.
+        try:
             from integrations.social.api import social_bp as _social_core_bp
-            _safe_register_bp(_social_core_bp, name_hint='social')  # auth, users, posts, feed
-            logging.info("Social blueprints registered (deferred — routes available after this log line)")
+            registered = _safe_register_bp(_social_core_bp, name_hint='social')
+            if registered:
+                logging.info("Social core blueprint (social_bp) registered — /api/social/posts, /auth/*, /users, /feed now live")
+            else:
+                logging.debug("Social core blueprint already registered (idempotency guard)")
         except Exception as _bp_err:
-            logging.warning(f"Social blueprint registration failed: {_bp_err}")
+            logging.warning(f"Social core blueprint registration failed: {_bp_err}")
 
         try:
             from integrations.distributed_agent import distributed_agent_bp
@@ -5041,16 +5138,49 @@ if __name__ == '__main__':
 
         start_background_services()
 
-        # Start the server via waitress (production WSGI)
-        # Default to 127.0.0.1 (loopback only) for security; set NUNBA_BIND_HOST=0.0.0.0 to expose on all interfaces
+        # Start the server via waitress (production WSGI).  Waitress is
+        # Windows-safe (no fork required), multi-threaded, and production-
+        # hardened — the stock Flask/werkzeug dev server is NOT safe to
+        # expose even on loopback because it serialises every request on a
+        # single Python thread.  Once a chat, TTS, or model-hub call is in
+        # flight, every other endpoint (admin/models, /api/social/feed,
+        # /backend/health) waits behind it — the user sees the UI freeze.
+        #
+        # Thread count chosen to saturate the hot-path ceiling Nunba cares
+        # about: 16 parallel requests keeps chat (1.5s), draft (300ms),
+        # TTS streaming SSE, and the admin-UI polling calls all concurrent
+        # without starving CPU — llama.cpp workers run out of process on
+        # :8080/:8081 so the WSGI threads are I/O-bound anyway.  Override
+        # via NUNBA_WAITRESS_THREADS env for cloud/central deployments.
+        # Default to 127.0.0.1 (loopback only) for security; set
+        # NUNBA_BIND_HOST=0.0.0.0 to expose on all interfaces.
         bind_host = os.environ.get('NUNBA_BIND_HOST', '127.0.0.1')
         try:
+            _waitress_threads = int(os.environ.get('NUNBA_WAITRESS_THREADS', '16'))
+        except (TypeError, ValueError):
+            _waitress_threads = 16
+        try:
             from waitress import serve
-            logging.info(f"Starting Waitress server on {bind_host}:{args.port}")
-            serve(app, host=bind_host, port=args.port, threads=8)
+            logging.info(
+                f"Starting Waitress server on {bind_host}:{args.port} "
+                f"(threads={_waitress_threads})"
+            )
+            # channel_timeout keeps slow clients from tying up a worker forever.
+            # cleanup_interval=30 keeps per-connection state from leaking on long
+            # SSE/chat streams.  Both chosen to match the 1.5s chat budget with
+            # generous safety margin for cold-start.
+            serve(
+                app,
+                host=bind_host,
+                port=args.port,
+                threads=_waitress_threads,
+                channel_timeout=120,
+                cleanup_interval=30,
+                ident='Nunba',
+            )
         except ImportError:
             logging.warning("waitress not available, falling back to Flask dev server")
-            app.run(debug=False, host=bind_host, port=args.port, use_reloader=False)
+            app.run(debug=False, host=bind_host, port=args.port, use_reloader=False, threaded=True)
     except Exception as e:
         logging.critical(f"Failed to start server: {str(e)}")
         logging.critical(traceback.format_exc())
