@@ -4,6 +4,39 @@ main.py -- Nunba Server
 A Friend, A Well Wisher, Your LocalMind
 Connect to Hivemind to collaborate with your friends' agents.
 """
+# WMI-hang prevention (MUST BE FIRST).
+# platform.uname/node/system/release/version on Windows funnel through
+# _wmi_query which hangs 60s+ when WMI is busy (Defender). Populate
+# platform._uname_cache so every caller gets instant cached results
+# and never touches WMI.  Witnessed 2026-04-21: startup blocked 70s+
+# in desktop/ai_key_vault + 50s+ in mouseinfo (transitive via
+# pyautogui).
+import platform as _p_wmi
+import sys as _s_wmi
+import os as _o_wmi
+try:
+    import socket as _sk_wmi
+    _hn_wmi = _sk_wmi.gethostname()
+except Exception:
+    _hn_wmi = _o_wmi.environ.get('COMPUTERNAME') or 'unknown'
+try:
+    from collections import namedtuple as _nt_wmi
+    _UR_wmi = _nt_wmi('uname_result',
+                      'system node release version machine processor')
+    _p_wmi._uname_cache = _UR_wmi(
+        system='Windows' if _s_wmi.platform == 'win32' else _s_wmi.platform,
+        node=_hn_wmi, release='', version='',
+        machine=_o_wmi.environ.get('PROCESSOR_ARCHITECTURE', 'AMD64'),
+        processor=_o_wmi.environ.get('PROCESSOR_IDENTIFIER', ''),
+    )
+except Exception:
+    pass
+del _p_wmi, _s_wmi, _o_wmi, _hn_wmi
+try:
+    del _sk_wmi, _nt_wmi, _UR_wmi
+except NameError:
+    pass
+
 import argparse
 import logging
 import os

@@ -639,6 +639,22 @@ if getattr(sys, 'frozen', False):
     _embed_site_packages = os.path.join(_app_dir, 'python-embed', 'Lib', 'site-packages')
     if os.path.isdir(_embed_site_packages) and _embed_site_packages not in sys.path:
         sys.path.append(_embed_site_packages)
+    # ── HevolveArmor: point HARTOS's native_hive_loader at the bundled
+    # armored hevolveai. setup_freeze_nunba.py stages the encrypted
+    # modules + key under <app_dir>/vendor/hevolveai_armored/ via
+    # HARTOS/scripts/armor_hevolveai.py at build time; here we export
+    # the env vars that security/native_hive_loader.py consults when
+    # hart_intelligence_entry first calls try_import_hevolveai. The
+    # hook install is lazy — it happens on first hevolveai import,
+    # not at app.py load — so no hevolvearmor import is needed here.
+    _armored_dir = os.path.join(_app_dir, 'vendor', 'hevolveai_armored')
+    if os.path.isdir(_armored_dir):
+        _armor_modules = os.path.join(_armored_dir, 'modules')
+        _armor_key = os.path.join(_armored_dir, '_key.bin')
+        if os.path.isdir(_armor_modules):
+            os.environ.setdefault('HEVOLVE_ARMORED_DIR', _armor_modules)
+        if os.path.isfile(_armor_key):
+            os.environ.setdefault('HEVOLVE_ARMOR_KEY_FILE', _armor_key)
     # Remove stale torchvision/_C.pyd from frozen lib/ — it conflicts with
     # the real CUDA torch in user site-packages (entry point mismatch error).
     # torch/torchvision should ONLY come from ~/.nunba/site-packages/.
@@ -967,6 +983,30 @@ if getattr(sys, 'frozen', False):
         _torch_stub.__version__ = '0.0.0'
         _torch_stub.__file__ = 'frozen_stub'
         _torch_stub._is_stub = True  # marker for downstream code to detect
+        # __spec__ MUST be set or `importlib.util.find_spec('torch')`
+        # raises `ValueError: torch.__spec__ is None` (Py 3.12 safeguard).
+        # transformers.is_torch_available() calls find_spec on every
+        # is_torch_available() invocation; without a spec, every
+        # transformers-backed path cascades into a ValueError.
+        # Witnessed 2026-04-21: hart_onboarding → langchain_classic →
+        # transformers → is_torch_available → ValueError: torch.__spec__
+        # is None, surfacing in hevolve_social Agent daemon tick errors
+        # + hart_intelligence blueprint init + /api/hart/generate.
+        try:
+            from importlib.machinery import ModuleSpec as _TorchStubSpec
+            _torch_stub.__spec__ = _TorchStubSpec(
+                name='torch', loader=None, origin='frozen_stub',
+                is_package=True,
+            )
+            _torch_stub.__spec__.submodule_search_locations = []
+        except Exception:
+            # Fallback: crude sentinel.  Better than None for find_spec.
+            class _StubSpec:  # noqa: N801
+                name = 'torch'
+                loader = None
+                origin = 'frozen_stub'
+                submodule_search_locations = []
+            _torch_stub.__spec__ = _StubSpec()
 
         # Core tensor type — a dummy class that raises on actual use
         class _TensorStub:
@@ -1005,14 +1045,23 @@ if getattr(sys, 'frozen', False):
         _torch_stub.ones = lambda *a, **kw: None
         _torch_stub.device = str  # torch.device('cpu') → just a string
 
-        # Submodules
-        _torch_stub.autograd = _types.ModuleType('torch.autograd')
-        _torch_stub.cuda = _types.ModuleType('torch.cuda')
+        # Submodules \u2014 each also needs __spec__ to satisfy find_spec.
+        def _mk_submod(_n):
+            _m = _types.ModuleType(_n)
+            try:
+                _m.__spec__ = _TorchStubSpec(
+                    name=_n, loader=None, origin='frozen_stub',
+                )
+            except Exception:
+                pass
+            return _m
+        _torch_stub.autograd = _mk_submod('torch.autograd')
+        _torch_stub.cuda = _mk_submod('torch.cuda')
         _torch_stub.cuda.is_available = lambda: False
         _torch_stub.cuda.empty_cache = lambda: None
         _torch_stub.cuda.device_count = lambda: 0
-        _torch_stub.nn = _types.ModuleType('torch.nn')
-        _torch_stub.nn.functional = _types.ModuleType('torch.nn.functional')
+        _torch_stub.nn = _mk_submod('torch.nn')
+        _torch_stub.nn.functional = _mk_submod('torch.nn.functional')
         _torch_stub.nn.Module = type('Module', (), {})
 
         sys.modules['torch'] = _torch_stub
@@ -6285,17 +6334,20 @@ def main():
         start_hidden = args.background and not (args.sidebar or args.always_on_top)
         if sys.platform == "darwin": start_hidden = False  # no tray on macOS — always show window
 
-        # First launch after installation: always show window (even in --background)
-        # so the user sees the app after reboot. Detected by checking if this is
-        # the first --background launch since setup-ai ran.
+        # Background mode (e.g., autostart after reboot) ALWAYS keeps the main
+        # window hidden.  The user-visible surface in that mode is:
+        #   - the system tray icon
+        #   - the floating Nanba companion window (animated character + input bar)
+        # The `.setup_complete` marker is still consumed (single-shot cleanup)
+        # but never overrides start_hidden — the floating companion is the
+        # post-install indicator, not a full-screen window flash.
         if start_hidden:
             try:
                 _setup_marker = os.path.join(
                     os.path.expanduser('~'), 'Documents', 'Nunba', 'data', '.setup_complete')
                 if os.path.exists(_setup_marker):
-                    logger.info("[STARTUP] First launch after installation — showing window")
-                    start_hidden = False
-                    os.remove(_setup_marker)  # only override once
+                    os.remove(_setup_marker)  # cleanup only — do NOT flip start_hidden
+                    logger.info("[STARTUP] .setup_complete marker cleaned up (background mode — window stays hidden)")
             except Exception:
                 pass
 
@@ -6355,12 +6407,29 @@ def main():
             import ctypes as _ct
             _screen_w = _ct.windll.user32.GetSystemMetrics(0) if sys.platform == 'win32' else 1920
             _screen_h = _ct.windll.user32.GetSystemMetrics(1) if sys.platform == 'win32' else 1080
-            _comp_w, _comp_h = 200, 260
+            # 220x310: character + status bar + input bar + platform hint.
+            # Must match the html/body size in landing-page/public/nanba-companion.html
+            # (DRY Gate 2 — window size and HTML size are the same contract).
+            _comp_w, _comp_h = 220, 310
             _comp_x = _screen_w - _comp_w - 30  # Bottom-right, 30px margin
             _comp_y = _screen_h - _comp_h - 80  # Above taskbar
 
             class CompanionAPI:
-                """Python bridge for the companion window JS."""
+                """Python bridge for the companion window JS.
+
+                Exposes three entry points:
+                  * on_companion_click        — user clicked the character (show main window)
+                  * on_companion_dblclick     — double-click (bring main window forward)
+                  * on_companion_prompt(text) — user hit Enter in the floating input bar;
+                                                 forwards the prompt to the /chat endpoint
+                                                 and returns the assistant reply for the
+                                                 speech bubble.
+
+                All three are synchronous from pywebview's perspective; on_companion_prompt
+                internally does a blocking requests.post but has a hard timeout and a
+                generic error path so the input bar always re-enables itself.
+                """
+
                 def on_companion_click(self):
                     """User clicked the companion — toggle main window or start voice chat."""
                     try:
@@ -6381,6 +6450,71 @@ def main():
                             _window.on_top = False
                     except Exception:
                         pass
+
+                def on_companion_prompt(self, text):
+                    """User submitted a quick prompt from the floating input bar.
+
+                    Forwards to the Flask /chat endpoint on this instance (loopback,
+                    same Waitress process) with a 60s timeout.  Returns a short
+                    string the JS will render in the speech bubble.
+
+                    Never raises — failure is mapped to a user-visible error string.
+                    """
+                    try:
+                        if not text or not str(text).strip():
+                            return "Type something first."
+                        prompt = str(text).strip()[:500]
+                        try:
+                            import requests  # runtime-optional; pip-installed in venv
+                        except Exception as _imp_err:
+                            logger.warning("[COMPANION] requests unavailable: %s", _imp_err)
+                            return "Chat unavailable (missing requests)."
+                        try:
+                            _port = args.port
+                        except Exception:
+                            _port = 5000
+                        _url = f"http://127.0.0.1:{_port}/chat"
+                        try:
+                            r = requests.post(
+                                _url,
+                                json={
+                                    "message": prompt,
+                                    "source": "companion_input_bar",
+                                },
+                                timeout=60,
+                            )
+                        except requests.Timeout:
+                            return "Nunba is still thinking — check the main window."
+                        except Exception as _net_err:
+                            logger.warning("[COMPANION] /chat call failed: %s", _net_err)
+                            return "Chat is offline. Try again in a moment."
+                        if r.status_code >= 400:
+                            logger.warning("[COMPANION] /chat returned %s", r.status_code)
+                            return f"Error {r.status_code} — try again."
+                        try:
+                            data = r.json()
+                        except Exception:
+                            return (r.text or "").strip()[:240] or "OK"
+                        reply = (
+                            (isinstance(data, dict) and (
+                                data.get("response")
+                                or data.get("message")
+                                or data.get("text")
+                                or data.get("reply")
+                            ))
+                            or ""
+                        )
+                        if isinstance(reply, (dict, list)):
+                            reply = str(reply)
+                        reply = (reply or "").strip()
+                        if not reply:
+                            reply = "Done."
+                        if len(reply) > 240:
+                            reply = reply[:237] + "…"
+                        return reply
+                    except Exception as _prompt_err:
+                        logger.exception("[COMPANION] on_companion_prompt failed: %s", _prompt_err)
+                        return "Something went wrong. Try the main window."
 
             _companion_api = CompanionAPI()
 
@@ -7529,18 +7663,14 @@ if __name__ == "__main__":
         _early_splash = None
         # _eroot stays alive — _show_splash reuses it
 
-    # Show animated splash screen
-    # Skip splash in background mode UNLESS this is the first launch after setup
+    # Show animated splash screen.
+    # Background mode (autostart after reboot) STRICTLY skips the splash —
+    # the floating companion window is the user-visible post-install
+    # indicator.  We do NOT touch the .setup_complete marker here; the
+    # marker is consumed once by the background-mode window-hidden block
+    # (app.py in __main__'s webview branch).  Keeping the cleanup in a
+    # single place preserves the one-writer invariant.
     _skip_splash = args.background
-    if _skip_splash:
-        try:
-            _setup_marker = os.path.join(
-                os.path.expanduser('~'), 'Documents', 'Nunba', 'data', '.setup_complete')
-            if os.path.exists(_setup_marker):
-                _skip_splash = False  # show splash on first post-install launch
-                logger.info("[STARTUP] First post-install launch — showing splash despite --background")
-        except Exception:
-            pass
 
     if _skip_splash:
         logger.info("[STARTUP] Background mode — skipping splash animation")
