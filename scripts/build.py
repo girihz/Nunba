@@ -1934,7 +1934,14 @@ def main():
         import tempfile as _tf_pf
         _free_gb_cwd = _shutil_pf.disk_usage(project_dir).free / (1 << 30)
         _free_gb_tmp = _shutil_pf.disk_usage(_tf_pf.gettempdir()).free / (1 << 30)
-        _MIN_DISK_GB = 2.5  # conservative: torch wheel + python-embed + build/
+        # Real cost = CUDA torch wheel (2.5GB) + python-embed tree (1.5GB)
+        # + cx_Freeze tree (3GB) + signed installer artifact (1GB) ≈ 8GB.
+        # Add 2GB headroom for pip-build-env-* and partial-extraction
+        # crashes.  The previous 2.5GB threshold was a regression that
+        # let installs fail halfway through (witnessed 2026-04-21,
+        # FreeSpace=4.3GB during a partial build that left python-embed
+        # corrupt and required full rebuild).
+        _MIN_DISK_GB = 10.0
         if _free_gb_cwd < _MIN_DISK_GB:
             sys.exit(
                 f"[PREFLIGHT] Refusing to build: CWD drive has only "

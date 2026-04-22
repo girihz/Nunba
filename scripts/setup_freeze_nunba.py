@@ -336,6 +336,20 @@ build_exe_options = {
         "tts.tts_engine",  # Unified TTS engine (auto-selects GPU/CPU backend)
         "tts.tts_handshake",  # First-run voice-check handshake (gates Ready banner)
         "tts.verified_synth",  # Verified-signal gate (consumed by tts_handshake + _bg_install)
+        # The remaining tts.verified_* siblings are deferred-imported from
+        # route bodies / app.py runtime probes (`from tts.verified_llm
+        # import verify_llm`).  cx_Freeze's static tracer cannot follow
+        # function-local imports of submodules whose siblings are already
+        # in the tree — Gate 6 (feedback_frozen_build_pitfalls.md Rule 6)
+        # demands every runtime-imported module be declared explicitly
+        # OR the installed .exe will ModuleNotFoundError on first call.
+        # Pulled in 2026-04-22 after reviewer + architect both flagged
+        # the omission against 9866b9a..c4f146fc.
+        "tts.verified_llm",
+        "tts.verified_stt",
+        "tts.verified_vlm",
+        "tts.verified_audio_gen",
+        "tts.verified_video_gen",
         "desktop.ai_installer",  # Unified AI components installer
         "desktop.ai_key_vault",  # Encrypted API key vault
         "desktop.crash_reporter",  # Sentry crash reporting (auto-initialized)
@@ -347,6 +361,17 @@ build_exe_options = {
         "desktop.media_classification",  # Media classification
         "desktop.guest_identity",  # Hardware-derived stable guest_id (J201)
         "desktop.chat_settings",  # Admin-controlled restore policy/scope (J207)
+        "desktop.chat_sync",  # Cross-device chat-history sync (function-local
+                              # import in main.py:1079/1102/1127 — tracer misses)
+        "wamp_router",  # Embedded WAMP/Crossbar router. Imported via
+                        # optional_import in main.py:2585 + statically at
+                        # 3298, 4813.  include_files copies the .py via the
+                        # root-glob, but cx_Freeze must trace the autobahn /
+                        # asyncio dep chain — only the explicit packages[]
+                        # entry guarantees that.  Without it, port 8088 never
+                        # listens (witnessed 2026-04-21 in gui_app.log:
+                        # "ConnectionRefusedError [WinError 1225]" backoff
+                        # loop to 264s with no router process).
         "routes.hartos_backend_adapter",  # Backend adapter (single-file module)
         "numpy",
         "jose",  # python-jose — JWT handling (HARTOS social auth)

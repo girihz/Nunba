@@ -81,14 +81,29 @@ import traceback
 os.environ.setdefault('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS',
                        '--autoplay-policy=no-user-gesture-required')
 
-# HuggingFace: skip model update checks when running offline / cached.
-# Prevents 30-60s of HEAD request timeouts on every model load.
-# Models are downloaded during install — no need to re-check at runtime.
-if not os.environ.get('HF_HUB_OFFLINE'):
-    _hf_cache = os.path.join(os.path.expanduser('~'), '.cache', 'huggingface', 'hub')
-    if os.path.isdir(_hf_cache) and any(
-            d.startswith('models--') for d in os.listdir(_hf_cache)):
-        os.environ['HF_HUB_OFFLINE'] = '1'
+# HuggingFace: do NOT force-set HF_HUB_OFFLINE=1 globally at boot.
+#
+# The previous heuristic ("any model cache present → set OFFLINE")
+# permanently blocked new TTS-backend installs from downloading their
+# weights — witnessed 2026-04-21 in gui_app.log:
+#     chatterbox_turbo install error: Cannot find an appropriate cached
+#     snapshot folder ... outgoing traffic has been disabled. To enable
+#     repo look-ups and downloads online, set 'HF_HUB_OFFLINE=0'.
+# A user with cached Whisper / MiniCPM weights but missing Chatterbox
+# could never auto-install the missing TTS engine because the cache
+# heuristic flipped them into offline-only mode.
+#
+# huggingface_hub has its own ETag-based fast path that completes in
+# ~50 ms when the cached file is current — the alleged 30-60s HEAD
+# stall only manifests on a degraded network, where blocking outbound
+# traffic doesn't help anyway (the install path needs the network).
+#
+# Users who want strict offline can still set HF_HUB_OFFLINE=1 in the
+# env before launching Nunba.  Programmatic offline-during-read can be
+# scoped by per-call kwargs to huggingface_hub APIs.
+#
+# Leaving HF_HUB_OFFLINE alone is the safer default for the auto-install
+# venv pipeline.
 
 from flask import Flask, jsonify, request, send_file
 
@@ -347,16 +362,20 @@ _has_file_handler = any(
 )
 
 if not _has_file_handler:
-    # Standalone mode — no app.py, so set up server.log ourselves
+    # Standalone mode — no app.py, so set up server.log ourselves.
+    # 25MB × 5 = 125MB cap (was unbounded → 344MB witnessed 2026-04-21).
+    from logging.handlers import RotatingFileHandler as _RFH_srv
     try:
-        _server_fh = logging.FileHandler(args.log_file, mode='a', encoding='utf-8')
+        _server_fh = _RFH_srv(args.log_file, mode='a', encoding='utf-8',
+                              maxBytes=25 * 1024 * 1024, backupCount=5)
         _server_fh.setLevel(logging.INFO)
         _server_fh.setFormatter(logging.Formatter(_log_format))
         _root_logger.addHandler(_server_fh)
     except Exception:
         temp_log_file = os.path.join(tempfile.gettempdir(), 'Nunba', 'server.log')
         os.makedirs(os.path.dirname(temp_log_file), exist_ok=True)
-        _server_fh = logging.FileHandler(temp_log_file, mode='a', encoding='utf-8')
+        _server_fh = _RFH_srv(temp_log_file, mode='a', encoding='utf-8',
+                              maxBytes=25 * 1024 * 1024, backupCount=5)
         _server_fh.setLevel(logging.INFO)
         _server_fh.setFormatter(logging.Formatter(_log_format))
         _root_logger.addHandler(_server_fh)
@@ -371,7 +390,9 @@ else:
     # app.py's gui_app.log FileHandler is the primary log destination.
     # Just add server.log as a SECONDARY destination (not replacing gui_app.log).
     try:
-        _server_fh = logging.FileHandler(args.log_file, mode='a', encoding='utf-8')
+        from logging.handlers import RotatingFileHandler as _RFH_srv
+        _server_fh = _RFH_srv(args.log_file, mode='a', encoding='utf-8',
+                              maxBytes=25 * 1024 * 1024, backupCount=5)
         _server_fh.setLevel(logging.INFO)
         _server_fh.setFormatter(logging.Formatter(_log_format))
         _root_logger.addHandler(_server_fh)
@@ -681,10 +702,11 @@ def after_request(response):
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
     response.headers['Access-Control-Max-Age'] = '3600'
 
-    # Chrome Private Network Access (PNA) headers — required for local network
-    # requests from secure contexts.  Without these Chrome shows warnings and
-    # may block requests to localhost in future versions.
-    if request.headers.get('Access-Control-Request-Private-Network') == 'true':
+    # Chrome Private Network Access — only honor when the origin already
+    # passed _is_allowed_origin (so any third-party page can't escalate
+    # itself by asking for PNA).
+    if (origin and _is_allowed_origin(origin)
+            and request.headers.get('Access-Control-Request-Private-Network') == 'true'):
         response.headers['Access-Control-Allow-Private-Network'] = 'true'
 
     # Security headers — desktop app, never iframed, no external scripts
@@ -727,8 +749,9 @@ def handle_preflight():
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
         response.headers['Access-Control-Max-Age'] = '3600'
 
-        # Chrome Private Network Access preflight
-        if request.headers.get('Access-Control-Request-Private-Network') == 'true':
+        # PNA preflight — same gating as the response handler.
+        if (origin and _is_allowed_origin(origin)
+                and request.headers.get('Access-Control-Request-Private-Network') == 'true'):
             response.headers['Access-Control-Allow-Private-Network'] = 'true'
 
         return response
@@ -915,6 +938,7 @@ def api_guest_id():
 
 
 @app.route('/api/guest-id', methods=['DELETE'])
+@require_local_or_token
 def api_guest_id_delete():
     """Wipe local guest identity + per-bucket history.
 
@@ -995,6 +1019,7 @@ def api_admin_chat_config_get():
 
 
 @app.route('/api/admin/config/chat', methods=['PUT'])
+@require_local_or_token
 def api_admin_chat_config_put():
     """Update the admin-controlled chat-restore settings.
 
@@ -1002,9 +1027,14 @@ def api_admin_chat_config_put():
     cloud_sync_enabled}``. Unknown keys are ignored (forward
     compat for older clients), invalid enum values 400.
 
-    Auth: this endpoint is local-only by virtue of Nunba's flask
-    binding to 127.0.0.1; admin gating in the broader sense is
-    out-of-scope for the MVP per CLAUDE.md (single-user desktop).
+    Auth: ``@require_local_or_token``. The "Nunba binds to 127.0.0.1
+    so loopback is implicitly trusted" reasoning is wrong — any web
+    page the user's browser visits while Nunba runs can fetch this
+    PUT and silently flip restore policy / scope / cloud sync
+    (drive-by CSRF, no Origin check on simple JSON POST).  The
+    decorator forces an X-Nunba-Local-Token header that the in-app
+    React SPA carries via http://localhost:<flask_port>/local but
+    third-party origins do not.
     """
     try:
         from desktop.chat_settings import update_chat_settings
@@ -1296,6 +1326,7 @@ def capture_screen_with_cursor():
         }), 500
 
 @app.route('/indicator/stop', methods=["GET"])
+@require_local_or_token
 def stop_ai_control_endpoint():
     """Stop AI Control and hide the indicator"""
     global llm_control_active
@@ -1715,8 +1746,62 @@ def admin_models_unload(model_id):
         return jsonify({"error": str(e)}), 500
 
 
-# Track active downloads for progress reporting
-_download_progress = {}  # model_id → {status, percent, message, started_at}
+# Bounded download-progress map (regression class of Task #237 / #259).
+from collections import OrderedDict as _OrderedDict
+
+
+class _BoundedDict(_OrderedDict):
+    _MAX = 64
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self.move_to_end(key)
+        while len(self) > self._MAX:
+            self.popitem(last=False)
+
+
+_download_progress = _BoundedDict()
+
+
+def _hb_sleep(name, total_s, chunk_s=10.0, stop_check=None):
+    """Wrap watchdog.sleep_with_heartbeat with chunked-sleep fallback."""
+    if total_s <= 0:
+        return
+    try:
+        from security.node_watchdog import get_watchdog
+        wd = get_watchdog()
+        if wd is not None:
+            wd.sleep_with_heartbeat(
+                name, total_s, chunk_seconds=chunk_s, stop_check=stop_check)
+            return
+    except Exception:
+        pass
+    end = time.monotonic() + total_s
+    while time.monotonic() < end:
+        if stop_check and stop_check():
+            return
+        time.sleep(min(chunk_s, max(0.0, end - time.monotonic())))
+
+
+def _hb_register(name, expected_interval=30.0):
+    try:
+        from security.node_watchdog import get_watchdog
+        wd = get_watchdog()
+        if wd is not None and hasattr(wd, 'register'):
+            wd.register(name, expected_interval=expected_interval)
+    except Exception:
+        pass
+
+
+def _open_lc_subprocess_log():
+    """Append-mode line-buffered log handle for the LangChain subprocess."""
+    log_dir = os.path.join(
+        os.path.expanduser('~'), 'Documents', 'Nunba', 'logs')
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except OSError:
+        pass
+    return open(os.path.join(log_dir, 'langchain_subprocess.log'),
+                'a', encoding='utf-8', errors='replace', buffering=1)
 
 @app.route('/api/admin/models/<model_id>/download', methods=["POST"])
 def admin_models_download(model_id):
@@ -3008,6 +3093,29 @@ def _is_private_ip(hostname):
     except (socket.gaierror, ValueError):
         return True  # Block if can't resolve
 
+
+def _resolve_and_check_public(hostname):
+    """Resolve a hostname ONCE and return the public IP (or None if private).
+
+    DNS-rebinding defense: ``_is_private_ip`` resolves once, then the
+    follow-up ``requests.get`` resolves again — an attacker-controlled
+    DNS record with TTL=0 alternating between a public address (passes
+    the gate) and ``127.0.0.1`` / ``169.254.169.254`` (gets fetched)
+    bypasses the check.  This helper returns the resolved IP so the
+    caller can pass it as ``Host``-rewritten URL or override ``getaddrinfo``.
+
+    Returns the IP string when the host resolves to a publicly-routable
+    address, else None.
+    """
+    try:
+        ip_str = socket.gethostbyname(hostname)
+        ip = ipaddress.ip_address(ip_str)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            return None
+        return ip_str
+    except (socket.gaierror, ValueError):
+        return None
+
 # Image proxy endpoint to fetch external images (avoids CORS issues)
 @app.route('/api/image-proxy')
 def image_proxy():
@@ -3046,18 +3154,18 @@ def image_proxy():
         }), 400
 
     hostname = parsed.hostname
-    if not hostname or _is_private_ip(hostname):
+    # _resolve_and_check_public rejects loopback/private/link-local/reserved
+    # with a single authoritative resolve. Residual TTL-based rebind window
+    # exists between this check and requests.get's own resolve; mitigated by
+    # no-auth / no-cookie trust posture on this path. Proper DNS-pinning
+    # without breaking cert verification needs a custom HTTPAdapter; deferred.
+    if not hostname or _resolve_and_check_public(hostname) is None:
         return jsonify({'error': 'Access to internal networks is not allowed'}), 403
 
     try:
-        # Fetch the image
         response = requests.get(image_url, timeout=10, stream=True)
         response.raise_for_status()
-
-        # Get content type
         content_type = response.headers.get('Content-Type', 'image/png')
-
-        # Return the image
         return response.content, 200, {'Content-Type': content_type}
     except Exception as e:
         logging.warning(f"Image proxy failed for {image_url}: {e}")
@@ -3364,12 +3472,21 @@ except Exception:
 
 
 @app.route('/publish', methods=['POST'])
+@require_local_or_token
 def wamp_http_bridge():
     """HTTP bridge for WAMP publish — compatible with crossbarhttp3 protocol.
 
     Accepts POST with JSON body: {topic: str, args: list, kwargs: dict}
     Publishes into the embedded WAMP router so all WebSocket subscribers receive it.
     This replaces the Crossbar.io HTTP Bridge Service for local/bundled mode.
+
+    Auth: ``@require_local_or_token``.  Without this, any page the user's
+    browser visits while Nunba runs can ``fetch('http://127.0.0.1:5000/publish',
+    {body: {topic: 'com.hertzai.hevolve.chat.<victim>', args: [...]}})``
+    and inject spoofed chat / TTS audio URLs into the victim's UI.  The
+    in-process callers (HARTOS, integrations.social.realtime) use
+    publish_local() directly, NOT this HTTP path, so the decorator
+    affects only external callers — exactly the threat model.
 
     Import failures land in /api/admin/diag/degradations via _wamp_mod —
     previously a missing wamp_router.py (bundle drift, port-conflict
@@ -3947,8 +4064,9 @@ def _fleet_restart_watcher():
     Fleet commands (tier_promote, tier_demote) set this env var when central
     pushes a tier change. The node must restart for the new tier to take effect.
     """
+    _hb_register('fleet-restart-watcher', expected_interval=15.0)
     while True:
-        time.sleep(10)
+        _hb_sleep('fleet-restart-watcher', 10)
         restart_target = os.environ.pop('HEVOLVE_RESTART_REQUESTED', '')
         if restart_target:
             reason = os.environ.pop('HEVOLVE_RESTART_REASON', 'Fleet command')
@@ -4497,14 +4615,17 @@ def start_langchain_service():
         if sys.platform == 'win32':
             creation_flags = subprocess.CREATE_NO_WINDOW
 
+        # Was DEVNULL — crashes left zero diagnostic. Pipe stdio to a
+        # tailable log file so the watchdog has something to grep.
+        _lc_log = _open_lc_subprocess_log()
         _langchain_process = subprocess.Popen(
             [sys.executable, langchain_script],
             cwd=os.path.abspath(langchain_dir),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=_lc_log, stderr=_lc_log,
             creationflags=creation_flags,
         )
-        logging.info(f"LangChain service starting (PID {_langchain_process.pid}) on port {langchain_port}")
+        logging.info(f"LangChain service starting (PID {_langchain_process.pid}) "
+                     f"on port {langchain_port}")
 
         # Poll for readiness (up to 10 seconds)
         for i in range(20):
@@ -4576,9 +4697,11 @@ def _langchain_watchdog():
 
     wdlog = logging.getLogger('LangChainWatchdog')
     wdlog.info("[WATCHDOG] LangChain watchdog started")
+    _hb_register('langchain-watchdog',
+                 expected_interval=max(60.0, _WATCHDOG_POLL_INTERVAL * 2))
 
     # Wait for initial startup to complete (give the service time to boot)
-    time.sleep(_WATCHDOG_RESTART_COOLDOWN)
+    _hb_sleep('langchain-watchdog', _WATCHDOG_RESTART_COOLDOWN)
 
     langchain_port = 6777
     langchain_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -4610,7 +4733,7 @@ def _langchain_watchdog():
                         f"failure(s) (port {langchain_port})"
                     )
                 consecutive_failures = 0
-                time.sleep(_WATCHDOG_POLL_INTERVAL)
+                _hb_sleep('langchain-watchdog', _WATCHDOG_POLL_INTERVAL)
                 continue
 
             # Service is not healthy
@@ -4622,7 +4745,7 @@ def _langchain_watchdog():
             )
 
             if consecutive_failures < _WATCHDOG_FAIL_THRESHOLD:
-                time.sleep(_WATCHDOG_POLL_INTERVAL)
+                _hb_sleep('langchain-watchdog', _WATCHDOG_POLL_INTERVAL)
                 continue
 
             # --- Threshold reached: restart the service ---
@@ -4669,11 +4792,11 @@ def _langchain_watchdog():
                 if sys.platform == 'win32':
                     creation_flags = subprocess.CREATE_NO_WINDOW
 
+                _lc_log = _open_lc_subprocess_log()
                 _langchain_process = subprocess.Popen(
                     [sys.executable, langchain_script],
                     cwd=os.path.abspath(langchain_dir),
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stdout=_lc_log, stderr=_lc_log,
                     creationflags=creation_flags,
                 )
                 _watchdog_restart_count += 1
@@ -4706,12 +4829,12 @@ def _langchain_watchdog():
 
             # Reset failure counter and apply cooldown
             consecutive_failures = 0
-            time.sleep(_WATCHDOG_RESTART_COOLDOWN)
+            _hb_sleep('langchain-watchdog', _WATCHDOG_RESTART_COOLDOWN)
 
         except Exception as e:
             # Watchdog must never crash — catch everything and keep going
             wdlog.error(f"[WATCHDOG] Unexpected error in watchdog loop: {e}")
-            time.sleep(_WATCHDOG_POLL_INTERVAL)
+            _hb_sleep('langchain-watchdog', _WATCHDOG_POLL_INTERVAL)
 
 
 _vision_service = None  # Global VisionService instance (accessed by chatbot_routes)
@@ -4908,20 +5031,22 @@ def start_background_services():
             try:
                 from core.user_lang import get_preferred_lang
                 preferred_lang = get_preferred_lang() or 'en'
-            except Exception:
-                # Final fallback only if core.user_lang isn't importable
-                # (e.g. standalone main.py harness). Keeps old behavior as
-                # a backstop, never as the primary path.
+            except Exception as _lang_exc:
+                # core.user_lang is the SINGLE source of truth for
+                # `hart_language.json`.  The previous fallback re-read
+                # the JSON inline, but with a different key name
+                # ('language' vs 'preferred_lang') than the canonical
+                # reader uses — a drift vector waiting to bite.  HARTOS
+                # is a hard pip dependency in every shipped build, so
+                # if this except branch fires we have a deeper problem
+                # than language detection; log it loudly and keep 'en'.
+                logging.error(
+                    "core.user_lang unavailable in TTS warmup (%s); "
+                    "falling back to 'en'. This indicates a HARTOS "
+                    "import / packaging regression — investigate.",
+                    _lang_exc,
+                )
                 preferred_lang = 'en'
-                try:
-                    import json as _json
-                    _hart_lang_file = os.path.join(
-                        os.path.expanduser('~'), 'Documents', 'Nunba', 'data', 'hart_language.json')
-                    if os.path.exists(_hart_lang_file):
-                        with open(_hart_lang_file) as _f:
-                            preferred_lang = _json.load(_f).get('language', 'en')
-                except Exception:
-                    pass
 
             # Import TTSEngine class first (just the class, not get_tts_engine singleton)
             # so we can prime its cache BEFORE it constructs the engine

@@ -2668,7 +2668,11 @@ def chat_route():
             response = requests.post(
                 cloud_endpoint,
                 json=payload,
-                timeout=60,
+                # Tiered timeout: 5s connect, 60s total.  Single int timeout
+                # leaves connect-time budget conflated with read-time budget;
+                # a stuck DNS resolution then burns the full 60s before any
+                # data flows.  Cloud chat is on the user-facing hot path.
+                timeout=(5, 60),
                 headers=cloud_headers
             )
 

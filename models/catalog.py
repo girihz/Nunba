@@ -205,25 +205,36 @@ def _register_nunba_populators(catalog: ModelCatalog):
     _populators_registered = True
 
 
+# Cache enforcement against the catalog's mutation counter so we don't
+# walk every entry on every get_catalog() call. ModelCatalog increments
+# a counter on register/update; we re-run only when it advances.
+_business_rules_enforced_at: int = -1
+
+
 def _enforce_nunba_business_rules(catalog: ModelCatalog) -> None:
     """Apply Nunba-owned business rules AFTER all populators have run.
 
     HARTOS is upstream; its populators (e.g. MakeItTalk TTS, the 11
     sherpa/faster-whisper STT variants) don't know Nunba's local-first
-    tagging convention and ship entries without ``'local'`` in their
-    tag list. Nunba is the desktop shell that surfaces these models to
-    end users, so the user-facing taxonomy is OWNED here — we normalise
-    in a single pass over every entry rather than force every HARTOS
-    populator to import Nunba conventions.
-
-    The invariant is enforced as a test (`test_has_local_tag`) against
-    every entry the catalog exposes.
+    tagging convention. We normalise in a single pass rather than force
+    every HARTOS populator to import Nunba conventions. Invariant guarded
+    by `test_has_local_tag` against every exposed entry.
     """
+    global _business_rules_enforced_at
+    version = getattr(catalog, '_mutation_count',
+                      getattr(catalog, 'version', None))
+    # Fall back to entry-count fingerprint when the catalog doesn't expose
+    # a counter — still skips the walk on read-only repeats.
+    if version is None:
+        version = len(catalog.list_all())
+    if version == _business_rules_enforced_at:
+        return
     for entry in catalog.list_all():
         tags = list(entry.tags or [])
         if 'local' not in tags:
             tags.append('local')
             entry.tags = tags
+    _business_rules_enforced_at = version
 
 
 def get_catalog() -> ModelCatalog:

@@ -313,30 +313,51 @@ def install_into_venv(
             log_f.write("-- pip upgrade TIMEOUT (300s) — continuing\n")
 
         # Install packages one-by-one so a failure localises to the
-        # offending spec. Also makes the log readable.
+        # offending spec. Retry transient failures (network blip, mirror
+        # 5xx) with exponential backoff before giving up — full venv
+        # rebuild on a single flake costs the user 5+ minutes.
+        import random as _random
+        _MAX_PIP_ATTEMPTS = 3
+        _RETRY_RC = {1, 2}  # generic pip failures (network, hash mismatch)
         for pkg in packages:
             log_f.write(f"\n-- installing {pkg!r}\n")
             log_f.flush()
-            try:
-                r = subprocess.run(
-                    [str(pyexe), "-m", "pip", "install", pkg],
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout_per_package,
-                    startupinfo=si,
-                    creationflags=cf or 0,
+            r = None
+            for attempt in range(1, _MAX_PIP_ATTEMPTS + 1):
+                try:
+                    r = subprocess.run(
+                        [str(pyexe), "-m", "pip", "install", pkg],
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout_per_package,
+                        startupinfo=si,
+                        creationflags=cf or 0,
+                    )
+                except subprocess.TimeoutExpired:
+                    msg = f"pip install {pkg!r} timed out after {timeout_per_package}s"
+                    log_f.write(msg + "\n")
+                    return False, msg
+                log_f.write(r.stdout or "")
+                log_f.write(r.stderr or "")
+                if r.returncode == 0:
+                    break
+                if attempt >= _MAX_PIP_ATTEMPTS or r.returncode not in _RETRY_RC:
+                    break
+                # Exp backoff with jitter — 2s, 4s, 8s ± up to 25%.
+                backoff = (2 ** attempt) * (1.0 + _random.uniform(-0.25, 0.25))
+                log_f.write(
+                    f"-- attempt {attempt}/{_MAX_PIP_ATTEMPTS} rc={r.returncode}; "
+                    f"retrying in {backoff:.1f}s\n"
                 )
-            except subprocess.TimeoutExpired:
-                msg = f"pip install {pkg!r} timed out after {timeout_per_package}s"
-                log_f.write(msg + "\n")
-                return False, msg
-            log_f.write(r.stdout or "")
-            log_f.write(r.stderr or "")
+                log_f.flush()
+                time.sleep(backoff)
             log_f.flush()
-            if r.returncode != 0:
+            if r is None or r.returncode != 0:
                 return False, (
-                    f"pip install {pkg!r} failed: rc={r.returncode} "
-                    f"tail={r.stderr[-400:]!r}"
+                    f"pip install {pkg!r} failed after "
+                    f"{_MAX_PIP_ATTEMPTS} attempts: "
+                    f"rc={getattr(r, 'returncode', '?')} "
+                    f"tail={(getattr(r, 'stderr', '') or '')[-400:]!r}"
                 )
 
         # Verify importability inside the venv. For each pip spec, strip

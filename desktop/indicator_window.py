@@ -25,9 +25,20 @@ except Exception:
     # AttributeError when pyautogui isn't installed in the runner env.
     pyautogui = None  # type: ignore[assignment]
 
-# Configure logging
-user_docs = os.path.join(os.path.expanduser('~'), 'Documents')
-log_dir = os.path.join(user_docs, 'HevolveAi Agent Companion', 'logs')
+# Configure logging — use core.platform_paths.get_log_dir() (canonical
+# Nunba log directory `~/Documents/Nunba/logs/`).  The hard-coded
+# `~/Documents/HevolveAi Agent Companion/logs/` path was a parallel
+# filesystem namespace that broke the data-paths contract: log
+# rotation, log-cleanup tasks, and the existing tail-the-log debug
+# workflow all skipped this directory entirely.
+try:
+    from core.platform_paths import get_log_dir
+    log_dir = get_log_dir()
+except Exception:
+    # Standalone harness without HARTOS — match the canonical layout.
+    log_dir = os.path.join(
+        os.path.expanduser('~'), 'Documents', 'Nunba', 'logs',
+    )
 os.makedirs(log_dir, exist_ok=True)
 log_file = os.path.join(log_dir, 'indicator_window.log')
 
@@ -835,17 +846,24 @@ class RibbonIndicator:
 _indicator_window = None
 _window_thread = None
 
+_auto_hide_stop = threading.Event()
+
+
+def stop_auto_hide():
+    """Signal auto_hide_after_timeout to exit cleanly (called on shutdown)."""
+    _auto_hide_stop.set()
+
+
 def auto_hide_after_timeout(timeout_seconds=15.0):
     """Automatically hide the indicator after inactivity"""
     global indicator_active, control_start_time
-    
+
     if globals().get('STANDALONE_TEST_MODE', False):
         logger.info("Auto-hide disabled in standalone test mode")
-        while True:
-            time.sleep(60)
-    
-    while True:
-        time.sleep(1.0)
+        _auto_hide_stop.wait()
+        return
+
+    while not _auto_hide_stop.wait(1.0):
         try:
             if indicator_active and control_start_time:
                 elapsed = time.time() - control_start_time

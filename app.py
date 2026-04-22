@@ -958,8 +958,31 @@ if getattr(sys, 'frozen', False):
 
     if _torch_safe:
         try:
-            import torch as _torch_test
-            del _torch_test
+            import torch as _torch_real
+            # cx_Freeze loads torch via the frozen importer which leaves
+            # `__spec__` as None.  transformers.is_torch_available() calls
+            # `importlib.util.find_spec('torch')` which raises
+            # `ValueError: torch.__spec__ is None` on Py 3.12+.  That cascades
+            # through langchain_classic → hart_intelligence_entry and breaks
+            # the HARTOS Tier-1 import path (witnessed 2026-04-21 in
+            # hartos_init_error.log).  Patch __spec__ on the REAL torch the
+            # same way we patch the stub torch below.
+            if getattr(_torch_real, '__spec__', None) is None:
+                try:
+                    from importlib.machinery import ModuleSpec as _RealTorchSpec
+                    _torch_real.__spec__ = _RealTorchSpec(
+                        name='torch',
+                        loader=None,
+                        origin=getattr(_torch_real, '__file__', 'frozen_real'),
+                        is_package=True,
+                    )
+                    _torch_real.__spec__.submodule_search_locations = list(
+                        getattr(_torch_real, '__path__', []) or []
+                    )
+                    _trace("torch.__spec__ patched (frozen real torch)")
+                except Exception as _spec_exc:
+                    _trace(f"torch.__spec__ patch failed: {_spec_exc}")
+            del _torch_real
         except (ImportError, ModuleNotFoundError):
             pass
         except (AttributeError, OSError, RuntimeError):
@@ -2126,7 +2149,10 @@ _log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 _root_logger = logging.getLogger()
 _root_logger.setLevel(logging.INFO)
 
-_gui_fh = logging.FileHandler(log_file, mode='a', encoding='utf-8')
+from logging.handlers import RotatingFileHandler as _RFH
+# 25MB × 5 = 125MB cap (was unbounded → 347MB witnessed 2026-04-21).
+_gui_fh = _RFH(log_file, mode='a', encoding='utf-8',
+               maxBytes=25 * 1024 * 1024, backupCount=5)
 _gui_fh.setLevel(logging.INFO)
 _gui_fh.setFormatter(logging.Formatter(_log_format))
 _root_logger.addHandler(_gui_fh)

@@ -197,13 +197,53 @@ def _background_hartos_init():
             _hartos_initialized = True
         except Exception as _ie:
             _hartos_initialized = True  # mark done even on failure
-            # Write to file directly — logger may be silenced in frozen builds
+            # Write to file directly — logger may be silenced in frozen builds.
+            # Hardening:
+            #   * O_NOFOLLOW + O_CREAT + 0o600 → same-user malware cannot
+            #     pre-plant a symlink to overwrite an arbitrary file.
+            #   * Scrub the traceback of env-var values that may carry
+            #     HF tokens / API keys (transformers errors love to echo
+            #     ``HF_TOKEN=hf_...`` in their messages).
             try:
                 import traceback as _tb
-                _err_path = os.path.join(os.path.expanduser('~'), 'Documents', 'Nunba', 'logs', 'hartos_init_error.log')
-                with open(_err_path, 'w') as _ef:
-                    _ef.write(f"Tier-1 import failed: {_ie}\n")
-                    _tb.print_exc(file=_ef)
+                import io as _io
+                import re as _re_scrub
+                _err_path = os.path.join(
+                    os.path.expanduser('~'), 'Documents', 'Nunba', 'logs',
+                    'hartos_init_error.log',
+                )
+                _buf = _io.StringIO()
+                _buf.write(f"Tier-1 import failed: {_ie}\n")
+                _tb.print_exc(file=_buf)
+                _raw = _buf.getvalue()
+                # Redact common secret env-var values if they appear verbatim
+                _secret_keys = (
+                    'HF_TOKEN', 'HUGGINGFACE_TOKEN', 'OPENAI_API_KEY',
+                    'ANTHROPIC_API_KEY', 'NUNBA_LOCAL_TOKEN',
+                    'NUNBA_WAMP_TICKET', 'HEVOLVE_API_KEY',
+                    'AWS_SECRET_ACCESS_KEY', 'GH_TOKEN', 'GITHUB_TOKEN',
+                )
+                for _k in _secret_keys:
+                    _v = os.environ.get(_k)
+                    if _v and len(_v) >= 8:
+                        _raw = _raw.replace(_v, f"<redacted:{_k}>")
+                # Generic ``hf_<40 hex>``, ``sk-<40+>``, ``ghp_<36>`` patterns
+                _raw = _re_scrub.sub(
+                    r'\b(?:hf_|sk-|sk-ant-|ghp_|ghs_)[A-Za-z0-9_-]{20,}\b',
+                    '<redacted-token>', _raw,
+                )
+                _flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+                if hasattr(os, 'O_NOFOLLOW'):
+                    _flags |= os.O_NOFOLLOW
+                _fd = os.open(_err_path, _flags, 0o600)
+                try:
+                    with os.fdopen(_fd, 'w', encoding='utf-8') as _ef:
+                        _ef.write(_raw)
+                except Exception:
+                    try:
+                        os.close(_fd)
+                    except Exception:
+                        pass
             except Exception:
                 pass
             if _BUNDLED_MODE:
@@ -351,10 +391,15 @@ def _fallback_chat(text: str, user_id: str = None, **kwargs) -> dict[str, Any]:
 
             messages.append({"role": "user", "content": text})
 
+            # Tiered timeout: 5s connect + 60s total.  Single int timeout=120
+            # held a waitress worker for 2 full minutes on a stuck downstream;
+            # with 4 workers, /api / /social / /status all saturated.  60s
+            # total is still generous for chat completions; reduce further
+            # once we have streaming responses.
             response = requests.post(
                 f"{endpoint}/v1/chat/completions",
                 json={"model": "local", "messages": messages, "stream": False},
-                timeout=120
+                timeout=(5, 60),
             )
             data = response.json()
             return {

@@ -1818,8 +1818,17 @@ class TTSEngine:
                    or (result.get('results', [{}])[0].get('url')
                        if result.get('results') else None))
             if result.get('status') == 'completed' and url:
-                import urllib.request
-                urllib.request.urlretrieve(url, out_path)
+                # urllib.request.urlretrieve has NO timeout kwarg — a stuck
+                # remote URL hangs the chat hot path indefinitely (Gate 7
+                # banned pattern, same class as the wmic 27-min hang).
+                # Switch to requests.get(timeout=...) with chunked write.
+                import requests as _req
+                _resp = _req.get(url, timeout=60, stream=True)
+                _resp.raise_for_status()
+                with open(out_path, 'wb') as _of:
+                    for _chunk in _resp.iter_content(chunk_size=65536):
+                        if _chunk:
+                            _of.write(_chunk)
                 return out_path
 
             # Async — poll until done, respecting ledger pause/cancel
@@ -1852,8 +1861,14 @@ class TTSEngine:
                                   or (poll.get('results', [{}])[0].get('url')
                                       if poll.get('results') else None))
                         if dl_url:
-                            import urllib.request
-                            urllib.request.urlretrieve(dl_url, out_path)
+                            # See note above — urlretrieve cannot timeout.
+                            import requests as _req
+                            _resp = _req.get(dl_url, timeout=60, stream=True)
+                            _resp.raise_for_status()
+                            with open(out_path, 'wb') as _of:
+                                for _chunk in _resp.iter_content(chunk_size=65536):
+                                    if _chunk:
+                                        _of.write(_chunk)
                             return out_path
                         return None
                     elif poll.get('status') == 'failed':
