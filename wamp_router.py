@@ -241,15 +241,19 @@ def _handle_hello(session: WampSession, msg: list):
                            session.session_id)
             return
 
-    # No auth required — DO NOT trust client-provided authid.  The
-    # client could pass `authid=<victim_user_id>` and attempt to subscribe
-    # to user-scoped topics.  Force 'anonymous'; the topic authorization
-    # gate then refuses any non-public topic.  When real per-user access
-    # is needed, NUNBA_WAMP_TICKET must be set so the AUTHENTICATE flow
-    # binds the session to a server-issued identity.
-    _send_welcome(session, authid='anonymous')
-    logger.debug("Session %d joined realm '%s' as 'anonymous' (no-auth mode)",
-                 session.session_id, realm_name)
+    # No auth required — loopback single-user posture. start_wamp_router
+    # only skips ticket when bound to 127.0.0.1 (LAN mode auto-enables
+    # via _enable_auth_for_lan). On loopback the caller is the same
+    # machine as Flask + webview; authid is not a security boundary (a
+    # same-host attacker already has filesystem access). Trust the
+    # client-claimed authid so the webview's TTS / chat subscriptions
+    # continue to match com.hertzai.pupit.{userId} topics.
+    _claimed = str(details.get('authid', 'anonymous'))[:128]
+    if not all(c.isalnum() or c in ('-', '_', '.') for c in _claimed):
+        _claimed = 'anonymous'
+    _send_welcome(session, authid=_claimed)
+    logger.debug("Session %d joined realm '%s' as '%s' (loopback no-auth)",
+                 session.session_id, realm_name, _claimed)
 
 
 def _handle_authenticate(session: WampSession, msg: list):

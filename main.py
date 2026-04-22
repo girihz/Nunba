@@ -5008,6 +5008,7 @@ def start_background_services():
         logs a clear 'warmup exceeded' message if the probe is stuck,
         then lets the foreground request carry the cold-start penalty.
         """
+        _hb_register('tts-warmup', expected_interval=30.0)
         try:
             if os.environ.get('NUNBA_DISABLE_TTS'):
                 return
