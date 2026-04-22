@@ -106,8 +106,12 @@ class TestWampMessageHandlers:
             _sessions[sub_session.session_id] = sub_session
             _protocol_to_session[id(sub_proto)] = sub_session.session_id
 
+        # Use a public-prefix topic — per-topic authorization (Task #300/#301)
+        # requires either a public prefix OR per-user segment match. Plain
+        # 'com.test.events' would be refused. 'chat.social' is in the
+        # canonical HARTOS public whitelist.
         _handle_hello(sub_session, [1, 'realm1', {}])
-        _handle_subscribe(sub_session, [32, 1, {}, 'com.test.events'])
+        _handle_subscribe(sub_session, [32, 1, {}, 'chat.social'])
 
         # Create publisher session
         pub_sent = []
@@ -122,7 +126,7 @@ class TestWampMessageHandlers:
             _protocol_to_session[id(pub_proto)] = pub_session.session_id
 
         _handle_hello(pub_session, [1, 'realm1', {}])
-        _handle_publish(pub_session, [16, 2, {}, 'com.test.events', ['hello']])
+        _handle_publish(pub_session, [16, 2, {}, 'chat.social', ['hello']])
 
         # Subscriber should have received the event
         assert len(events_received) >= 1
@@ -176,19 +180,22 @@ class TestWampMessageHandlers:
             _sessions[session.session_id] = session
             _protocol_to_session[id(proto)] = session.session_id
 
+        # Use a public-prefix topic distinct from other tests so the
+        # shared module-level realm state doesn't collide (the other
+        # test uses 'chat.social'; both are in _PUBLIC_TOPIC_PREFIXES).
         _handle_hello(session, [1, 'realm1', {}])
-        _handle_subscribe(session, [32, 1, {}, 'com.test.cleanup'])
+        _handle_subscribe(session, [32, 1, {}, 'community.feed'])
 
         realm = _get_realm('realm1')
         with realm.lock:
-            assert 'com.test.cleanup' in realm.subscriptions
+            assert 'community.feed' in realm.subscriptions
 
         # Disconnect
         _on_session_close(proto)
 
         with realm.lock:
             # Topic should be gone (no subscribers left)
-            assert 'com.test.cleanup' not in realm.subscriptions
+            assert 'community.feed' not in realm.subscriptions
 
 
 class TestBackendPublish:
@@ -222,7 +229,9 @@ class TestBackendPublish:
             _sessions[session.session_id] = session
             _protocol_to_session[id(proto)] = session.session_id
 
-        _handle_hello(session, [1, 'realm1', {}])
+        # Subscribe as user99 — the topic is per-user scoped (last segment
+        # must match authid for auth to pass, per tasks #300/#301).
+        _handle_hello(session, [1, 'realm1', {'authid': 'user99'}])
         _handle_subscribe(session, [32, 1, {}, 'com.hertzai.hevolve.chat.user99'])
 
         publish_local('com.hertzai.hevolve.chat.user99',
