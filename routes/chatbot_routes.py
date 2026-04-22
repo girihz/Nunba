@@ -2291,6 +2291,78 @@ def chat_route():
     # To avoid duplicate audio, we check if HARTOS handled the request (Tier-1).
     # If Tier-2/3 produced the text, we synthesize here.
 
+    # Video mode: grab the latest camera frame and caption it inline before
+    # the LLM call.  This is the synchronous fallback that keeps Video-mode
+    # chat grounded even when VisionService's async `_description_loop` is
+    # silent.  Failure here is non-fatal — we just skip and let the LLM
+    # answer without visual context.
+    if media_mode == 'video':
+        try:
+            _svc = _get_vision_service()
+            _store = getattr(_svc, 'store', None) if _svc is not None else None
+            # Boot-race handler: if the chat fires before getUserMedia has
+            # resolved and POSTed the first frame, the store is still empty.
+            # Poll briefly (up to ~1.5 s in 150 ms slices) so the first turn
+            # after boot gets grounded context without needing a mode toggle.
+            _frame_bytes = None
+            if _store is not None:
+                for _ in range(10):
+                    _frame_bytes = _store.get_frame(str(user_id))
+                    if _frame_bytes:
+                        break
+                    time.sleep(0.15)
+            if _frame_bytes:
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as _tf:
+                    _tf.write(_frame_bytes)
+                    _tmp_path = _tf.name
+                try:
+                    from routes.upload_routes import _describe_image_via_llm
+                    _t0 = time.monotonic()
+                    _desc = _describe_image_via_llm(
+                        _tmp_path,
+                        "You are a video-call companion watching the user's camera. "
+                        "Describe what is visible right now in 1-2 sentences "
+                        "(person, action, objects, surroundings). Be concise and factual."
+                    )
+                    _elapsed_ms = int((time.monotonic() - _t0) * 1000)
+                    if _desc:
+                        # Strong framing: explicitly tell the LLM it HAS vision
+                        # right now and must answer from what it sees.  Plain
+                        # "[Live camera view — X]" was unreliable — small
+                        # models (and HARTOS's 0.8B draft classifier) still
+                        # fell back to their "I'm an AI, I can't see" pattern
+                        # on ~30% of turns.  The imperative instruction +
+                        # labelled OBSERVATION / USER QUESTION separator
+                        # overrides that baseline.
+                        text = (
+                            "You are on a live video call with the user. "
+                            "You CAN see them through the camera right now. "
+                            "Use the visual observation below to answer "
+                            "their question. Do not say you cannot see.\n"
+                            f"OBSERVATION (live camera, just now): {_desc}\n"
+                            f"USER QUESTION: {text}"
+                        )
+                        logger.info(
+                            f"Video mode: inline camera describe "
+                            f"({len(_frame_bytes)}B → {len(_desc)} chars, "
+                            f"{_elapsed_ms} ms)"
+                        )
+                    else:
+                        logger.info(
+                            f"Video mode: describe returned empty "
+                            f"({len(_frame_bytes)}B, {_elapsed_ms} ms)"
+                        )
+                finally:
+                    try:
+                        os.unlink(_tmp_path)
+                    except Exception:
+                        pass
+            else:
+                logger.info(f"Video mode: no frame in store for user {user_id}")
+        except Exception as _ve:
+            logger.warning(f"Video-mode inline describe skipped: {_ve}")
+
     # Find the agent configuration
     agent_config = None
     all_agents = LOCAL_AGENTS + CLOUD_AGENTS
@@ -2427,6 +2499,11 @@ def chat_route():
                 _needs_tools = bool(langchain_prompt_id or create_agent
                                     or agentic_execute or agentic_plan
                                     or autonomous_creation)
+                logger.info(
+                    f"hevolve_chat dispatch: media_mode={media_mode} "
+                    f"text[:160]={text[:160]!r} "
+                    f"conv_id={conversation_id} casual={not _needs_tools}"
+                )
                 result = hevolve_chat(
                     text=text,
                     user_id=str(user_id),

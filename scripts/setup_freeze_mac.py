@@ -429,6 +429,8 @@ info_plist = f"""<?xml version="1.0" encoding="UTF-8"?>
     <dict>
         <key>HEVOLVE_VLM_ENDPOINT_URL</key>
         <string>http://127.0.0.1:8080</string>
+        <key>HEVOLVE_VISION_BACKEND</key>
+        <string>qwen3vl</string>
     </dict>
 </dict>
 </plist>
