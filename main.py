@@ -3795,42 +3795,44 @@ def _safe_register_bp(bp, *, name_hint: str = '') -> bool:
         return False
 
 
+_setup_lock_bypass = threading.local()
+
+
 def _unlock_flask_setup_lock(flask_app) -> bool:
-    """Flask 2.3+ freezes setup methods (register_blueprint, before_request,
-    after_request, errorhandler, ...) after the first request is served:
+    """Override _check_setup_finished so deferred HARTOS blueprint
+    registration succeeds despite Flask serving concurrent requests.
 
-        RuntimeError: The setup method '<name>' can no longer be called on the
-        application. It has already handled its first request, any changes
-        will not be applied consistently.
+    One-shot `_got_first_request = False` is insufficient: Flask 3.x's
+    `full_dispatch_request()` re-sets it to True on EVERY request
+    (flask/app.py:911). The React SPA polls /backend/health, /api/guest-id,
+    /api/admin/config/chat every few seconds, so between our unlock and
+    `init_social(app)` the lock re-engages — leaving social_bp, hive_session,
+    hive_signals, marketplace, robotics, compute_optimizer unregistered
+    (witnessed 2026-04-21: 6 blueprints skipped silently, /api/social/*
+    returned 404 to the feed page).
 
-    Nunba's deferred-init path (`_deferred_social_init`) runs AFTER Flask has
-    already answered /chat, /backend/health, etc., so every blueprint that
-    it tries to register — `social_bp`, `hive_session`, `hive_signals`,
-    `gamification_bp`, and every other HARTOS surface — silently fails with
-    that RuntimeError, which is why `/api/social/posts` returns 404.
-
-    This helper resets the internal `_got_first_request` flag (Flask < 2.3)
-    and, for Flask >= 2.3, resets the `_got_first_request` attribute the Flask
-    `setupmethod` decorator inspects. The unlock is safe because:
-
-      * the deferred init only APPENDS blueprints and before_request hooks;
-      * /chat, /backend/health, /api/admin/config/chat are already defined
-        and served — they don't get re-defined here;
-      * register_blueprint is idempotent via _safe_register_bp.
-
-    Returns True if the lock was released (or was never engaged), False if
-    the Flask internals changed in a way we can't unlock.
+    Fix: install a per-app `_check_setup_finished` that honors a
+    thread-local bypass flag set by the deferred-init thread.  Dispatch
+    threads don't read that flag, so production-time mutation checks
+    stay intact for future out-of-window changes (Flask's intended
+    invariant).  The flag is set/cleared at the entry/exit of
+    `_deferred_social_init` to scope the bypass to registration only.
     """
+    import types as _types
     try:
-        # Flask < 2.3 (still present as a fallback attr in 2.3+)
         setattr(flask_app, '_got_first_request', False)
-        # Flask 2.3+ moved the lock onto the inner Flask object's
-        # `_got_first_request` attribute, which the setupmethod() decorator
-        # reads. Resetting both covers the version matrix.
-        try:
-            flask_app._got_first_request = False  # type: ignore[attr-defined]
-        except Exception:
-            pass
+
+        def _patched_check(self, f_name):
+            if getattr(_setup_lock_bypass, 'active', False):
+                return
+            if self._got_first_request:
+                raise AssertionError(
+                    f"The setup method '{f_name}' can no longer be called"
+                    " on the application. It has already handled its first"
+                    " request, any changes will not be applied consistently."
+                )
+
+        flask_app._check_setup_finished = _types.MethodType(_patched_check, flask_app)
         return True
     except Exception as _unlock_e:
         logging.debug(f"Flask setup-lock release skipped: {_unlock_e}")
@@ -3858,12 +3860,15 @@ def _deferred_social_init():
         return
 
     # ── 0) Release Flask's first-request setup lock ──────────────────────
-    # Flask 2.3+ blocks register_blueprint / before_request after the first
-    # request is served.  Because this function runs AFTER /chat and
-    # /backend/health have already answered, every downstream register_*
-    # call would raise RuntimeError.  `_unlock_flask_setup_lock` resets the
-    # internal `_got_first_request` flag so deferred registrations land.
+    # Flask 3.x re-sets `_got_first_request=True` on every request, so a
+    # one-shot unlock is insufficient — between unlock and init_social a
+    # health-poll request re-engages the lock. `_unlock_flask_setup_lock`
+    # installs a patched `_check_setup_finished` that honors a thread-local
+    # bypass flag. We set that flag for the entire init window so every
+    # register_blueprint / before_request call inside lands, regardless
+    # of concurrent request dispatch on other threads.
     _unlock_flask_setup_lock(app)
+    _setup_lock_bypass.active = True
 
     try:
         # ── 1a) Heavy HARTOS init_social (registers gamification/mcp/sharing
@@ -4021,6 +4026,11 @@ def _deferred_social_init():
         logging.info("hartos-init background thread kicked off (deferred)")
     except Exception as _hi_err:
         logging.debug(f"start_hartos_init_background skipped: {_hi_err}")
+
+    # Close the Flask setup-lock bypass so any post-init stray register_*
+    # call (bug or dynamic plugin load after this point) fails loud
+    # again, matching Flask's intended invariant.
+    _setup_lock_bypass.active = False
 
     logging.info("Social subsystem initialized (background)")
 
