@@ -97,10 +97,41 @@ if getattr(sys, 'frozen', False):
 # chain inside the hartos-init thread) get it from sys.modules cache
 # without re-executing torch/__init__.py.
 if getattr(sys, 'frozen', False):
+    # When the user passes --validate / --acceptance-test, reattach to the
+    # parent console so the verification report is actually visible.
+    # Nunba.exe is linked as a PE32+ GUI subsystem (pywebview / Twisted
+    # require it), which means Windows silently discards stdout/stderr
+    # unless a console is explicitly attached. Before this hook, a
+    # headless validate run looked like a hang; it was silently exiting.
+    # Diagnosis: task #377.
+    if any(flag in sys.argv for flag in ('--validate', '--acceptance-test', '--diag')):
+        try:
+            import ctypes
+            # ATTACH_PARENT_PROCESS = -1: attach to invoking console if any,
+            # else fall back to allocating a fresh one so direct launches
+            # still show output.
+            if not ctypes.windll.kernel32.AttachConsole(-1):
+                ctypes.windll.kernel32.AllocConsole()
+            # Re-wire stdio to the freshly-attached console FDs.
+            sys.stdout = open('CONOUT$', 'w', buffering=1, encoding='utf-8', errors='replace')
+            sys.stderr = open('CONOUT$', 'w', buffering=1, encoding='utf-8', errors='replace')
+        except Exception:
+            pass  # Non-Windows or no WinAPI — fall through; log file is still the source of truth.
     try:
+        import importlib.util
         import torch  # noqa: F401  — full torch.__init__ under stock importer
         import torch.autograd  # noqa: F401  — belt-and-braces: ensure attr bound
         import torch.nested  # noqa: F401  — warm before wrapper sees it
+        # cx_Freeze's loader sometimes leaves torch.__spec__ as None.
+        # transformers' _is_package_available() calls importlib.util.find_spec("torch")
+        # which returns None if __spec__ was never set, then raises
+        # ValueError when an attribute is read off of None. Re-seat the
+        # spec so the entire transformers → hart_intelligence chain loads.
+        # Diagnosis: task #377 + #297 (A1 re-landing).
+        if torch.__spec__ is None and getattr(torch, '__file__', None):
+            torch.__spec__ = importlib.util.spec_from_file_location(
+                'torch', torch.__file__,
+            )
     except Exception:
         # If torch isn't bundled or fails to import, don't crash app boot.
         # The hartos-init thread will re-attempt and surface a clearer error.
