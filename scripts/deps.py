@@ -152,6 +152,12 @@ EMBED_DEPS = {
     "faiss-cpu": "1.13.2",
     # Vision — 4.10.x is last line supporting numpy<2 (autogen-agentchat needs numpy<2)
     "opencv-python": "4.10.0.84",
+    # Pillow — needed by hevolveai.embodied_ai.utils.visual_encoding (PIL.Image
+    # at module load), vision pipeline, and MiniCPM preprocessing. Must live
+    # inside python-embed because the frozen app sets PYTHONNOUSERSITE=1 so
+    # gpu_worker subprocesses can't see the cx_Freeze venv copy. Kept in sync
+    # with CORE_DEPS["pillow"] — bump both together.
+    "pillow": CORE_DEPS["pillow"],
     # ML
     "scikit-learn": "1.7.2",
     # Tokenization
