@@ -64,27 +64,87 @@ jobs:
           token: ${{ secrets.HEVOLVE_REPO_TOKEN || github.token }}
         continue-on-error: true
 
-      - name: Verify sibling repos cloned (fail fast with actionable error)
+      - name: Verify sibling repos cloned (fork-aware diagnostic)
         shell: bash
+        env:
+          HAS_PAT: ${{ secrets.HEVOLVE_REPO_TOKEN != '' }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork || github.repository_owner != 'hertz-ai' }}
         run: |
-          # Since 2026-04-02: build.yml silently fails because default
-          # GITHUB_TOKEN lacks repo:read on private hertz-ai repos, so
-          # the sibling Checkout steps (continue-on-error: true) no-op,
-          # and the real failure surfaces 3 steps later as
-          # "ModuleNotFoundError: No module named 'sql'" which is
-          # opaque to anyone not knowing the setup.  Fail here with
-          # the fix path instead.
+          # Why this gate exists (2026-04-02 silent-failure history):
+          # The sibling Checkout steps use continue-on-error:true, so if
+          # the default GITHUB_TOKEN lacks repo:read on the private
+          # siblings, they no-op and the real failure surfaces 3 steps
+          # later as `ModuleNotFoundError: No module named 'sql'` \u2014 opaque
+          # to anyone not steeped in the setup.  Fail HERE with a useful
+          # diagnostic + action path.
+          #
+          # 2026-04-24: differentiate fork / contributor builds from
+          # internal main-repo builds.  Forks can't access the parent
+          # org's secrets by GitHub design, so HEVOLVE_REPO_TOKEN is
+          # NEVER present for fork PRs.  Hard-failing those just blocks
+          # external contribution.  Instead: emit a ::warning:: so the
+          # contributor knows why their installer-build-from-fork can't
+          # complete, and point them at the open-sourcing roadmap.
           missing=()
           for repo in HARTOS hevolveai Hevolve_Database; do
             if [ ! -d "_deps/$repo" ] || [ -z "$(ls -A "_deps/$repo" 2>/dev/null)" ]; then
               missing+=("$repo")
             fi
           done
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error title=Sibling repos missing::The private sibling repos [${missing[*]}] did not clone. This means default GITHUB_TOKEN lacks repo:read access to hertz-ai/* private repos. Add a HEVOLVE_REPO_TOKEN secret (PAT with repo:read scope) to repository settings. Until the secret is set, the Nunba installer build cannot complete \u2014 build-windows will fail on 'import sql', build-linux will fail on AppImage + hevolve-database install."
-            echo "Missing sibling repos: ${missing[*]}"
-            exit 1
+          if [ ${#missing[@]} -eq 0 ]; then
+            echo "All sibling repos cloned successfully."
+            exit 0
           fi
+
+          if [ "$HAS_PAT" = "false" ]; then
+            # Fork / no-PAT path: this is a legitimate state for external
+            # contributors.  Warn loudly but don't block the workflow so
+            # the contributor gets as far as their changes allow.
+            echo "::warning title=Private siblings unavailable (no HEVOLVE_REPO_TOKEN)::"
+            echo ""
+            echo "HEVOLVE_REPO_TOKEN secret is not available in this build"
+            echo "context \u2014 this is expected for:"
+            echo "  - pull requests from forks (GitHub blocks secrets on fork PRs)"
+            echo "  - external contributor rebuilds on their own fork"
+            echo ""
+            echo "Missing siblings: ${missing[*]}"
+            echo ""
+            echo "The installer steps that depend on these siblings will"
+            echo "fail further down (notably 'import sql' from Hevolve_Database"
+            echo "and hevolveai.* imports).  Your code changes still compile"
+            echo "+ lint via the quality.yml workflow, which is the"
+            echo "appropriate CI surface for fork PRs."
+            echo ""
+            echo "Open-sourcing roadmap:"
+            echo "  - Hevolve_Database: planned \u2014 unblocks the 'sql' import"
+            echo "    chain for fork builds.  Tracked in the Nunba task"
+            echo "    backlog as part of the CI-fork-friendly work."
+            echo "  - HevolveAI: stays private \u2014 loaded at runtime via the"
+            echo "    public hevolvearmor wheel (inside HARTOS)."
+            echo ""
+            echo "Exiting 0 to let the workflow continue until it hits the"
+            echo "actual missing-module boundary."
+            exit 0
+          fi
+
+          # HAS_PAT=true but clone still failed \u2014 this IS a real error
+          # that needs operator action.  Keep the hard-fail posture with
+          # the actionable fix path.
+          echo "::error title=Sibling repos missing despite HEVOLVE_REPO_TOKEN::"
+          echo ""
+          echo "HEVOLVE_REPO_TOKEN is set but the Checkout step(s) still"
+          echo "did not produce the sibling repos: ${missing[*]}"
+          echo ""
+          echo "Check:"
+          echo "  1. PAT has repo:read scope on hertz-ai/* private repos"
+          echo "  2. PAT is not expired (GitHub shows expiry at settings/tokens)"
+          echo "  3. PAT owner is still a member of the hertz-ai org"
+          echo "  4. The Checkout step logs above for the actual HTTP error"
+          echo ""
+          echo "Until this resolves the Nunba installer cannot build \u2014"
+          echo "build-windows will fail at 'import sql', build-linux at"
+          echo "AppImage + hevolve-database install."
+          exit 1
 
       - name: Link sibling repos
         shell: bash
