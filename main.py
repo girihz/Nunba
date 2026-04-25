@@ -2291,7 +2291,43 @@ def _get_trusted_orgs_legacy_view():
     return frozenset(e['org'] for e in get_allowlist().list())
 
 
-_TRUSTED_HF_ORGS = _get_trusted_orgs_legacy_view  # callable, not a set
+class _TrustedOrgsView:
+    """Live, lazy view of the trusted-orgs allowlist.
+
+    Supports the three idioms callers historically use against
+    `_TRUSTED_HF_ORGS` when it was a frozenset literal:
+
+      * `org in _TRUSTED_HF_ORGS`              → bool
+      * `for org in _TRUSTED_HF_ORGS`          → iterator of names
+      * `len(_TRUSTED_HF_ORGS)`                → count
+
+    Every dunder reads the live allowlist via `core.hub_allowlist`, so
+    operator CRUDs through the admin endpoints reflect immediately.
+    No snapshot, no cache — that was the explicit intent of the
+    original docstring on `_get_trusted_orgs_legacy_view` (the prior
+    binding was a bug: assigning the function REFERENCE rather than
+    its result, which made the view non-iterable).
+    """
+
+    __slots__ = ()
+
+    def __contains__(self, org: object) -> bool:
+        from core.hub_allowlist import get_allowlist
+        return get_allowlist().is_trusted(str(org))
+
+    def __iter__(self):
+        from core.hub_allowlist import get_allowlist
+        return iter(e['org'] for e in get_allowlist().list())
+
+    def __len__(self) -> int:
+        from core.hub_allowlist import get_allowlist
+        return len(get_allowlist().list())
+
+    def __repr__(self) -> str:
+        return f'_TrustedOrgsView({list(self)!r})'
+
+
+_TRUSTED_HF_ORGS = _TrustedOrgsView()
 
 
 # Category → default capabilities mapping for HF-installed models.

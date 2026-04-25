@@ -355,7 +355,7 @@ def main() -> int:
     ap.add_argument("--remove", action="store_true",
                     help="Stop, remove container + session volume + creds file")
     ap.add_argument("--phone", default=BOT_PHONE_DEFAULT,
-                    help="Your WhatsApp number in E.164 (e.g. +919003054371). "
+                    help="Your WhatsApp number in E.164 (e.g. +91XXXXXXXXXX). "
                          "If omitted, it is auto-discovered from WAHA after login.")
     args = ap.parse_args()
 
