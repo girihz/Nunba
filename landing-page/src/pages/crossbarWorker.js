@@ -794,6 +794,17 @@ function initCrossbar({
         // CHAT_TOPIC_NEW + integrations/social/chat_messages.publish_new.
         // Provider-side dedup by msg_id is owned by NunbaChatProvider.
         `com.hertzai.hevolve.chat.new.${userId}`,
+        // BLE encounter (J204, J209-J210): HARTOS encounter_api.swipe
+        // publishes match events on `<ENCOUNTER_TOPIC_MATCH>.<user_id>`
+        // and icebreaker_approve / decline publishes on
+        // `<ENCOUNTER_TOPIC_ICEBREAKER>.<user_id>`.  See HARTOS
+        // core/constants.py + integrations/social/encounter_api.py
+        // _publish_match / _publish_icebreaker.  Provider-side handler
+        // (EncounterMatchModal, IcebreakerSheet) registered via
+        // services/realtimeService.js subscribeEncounterMatch /
+        // subscribeEncounterIcebreaker.
+        `com.hevolve.encounter.match.${userId}`,
+        `com.hevolve.encounter.icebreaker.${userId}`,
         `com.hertzai.hevolve.${userId}`,
         `com.hertzai.bookparsing.${userId}`,
         `com.hertzai.hevolve.social.${userId}`,

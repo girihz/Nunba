@@ -481,6 +481,98 @@ export function subscribeChatNew(callback) {
   return () => _chatNewListeners.delete(callback);
 }
 
+// ── BLE encounter match + icebreaker (J204, J209-J210) ──────────────
+// Same worker-message-filter pattern as subscribeChatNew above.  HARTOS
+// encounter_api._publish_match / _publish_icebreaker fire on the
+// per-user-suffixed topics; the worker subscribes (crossbarWorker.js)
+// and posts DATA_RECEIVED with sourceTopic intact; we filter and
+// dispatch to typed listeners.
+
+const _encounterMatchListeners = new Set();
+let _encounterMatchWorkerHandler = null;
+
+function _ensureEncounterMatchWorker() {
+  if (_encounterMatchWorkerHandler || !_worker) return;
+  _encounterMatchWorkerHandler = (e) => {
+    const {type, payload} = e.data || {};
+    if (type !== 'DATA_RECEIVED' || !payload) return;
+    const {sourceTopic, data} = payload;
+    if (
+      typeof sourceTopic !== 'string' ||
+      !sourceTopic.startsWith('com.hevolve.encounter.match.')
+    ) {
+      return;
+    }
+    _encounterMatchListeners.forEach((cb) => {
+      try {
+        cb(data);
+      } catch (err) {
+        console.warn('encounter.match handler error:', err);
+      }
+    });
+  };
+  _worker.addEventListener('message', _encounterMatchWorkerHandler);
+}
+
+/**
+ * Subscribe to BLE encounter match events.  Callback receives the
+ * canonical Encounter row dict (id, user_a, user_b, lat, lng,
+ * matched_at, icebreaker_a_status, icebreaker_b_status, etc.).
+ * Fires once per mutual-like.  Use the payload's `id` as `match_id`
+ * for the subsequent /icebreaker/draft request.
+ *
+ * @param {(event: object) => void} callback
+ * @returns {Function} unsubscribe
+ */
+export function subscribeEncounterMatch(callback) {
+  _ensureEncounterMatchWorker();
+  _encounterMatchListeners.add(callback);
+  return () => _encounterMatchListeners.delete(callback);
+}
+
+
+const _encounterIcebreakerListeners = new Set();
+let _encounterIcebreakerWorkerHandler = null;
+
+function _ensureEncounterIcebreakerWorker() {
+  if (_encounterIcebreakerWorkerHandler || !_worker) return;
+  _encounterIcebreakerWorkerHandler = (e) => {
+    const {type, payload} = e.data || {};
+    if (type !== 'DATA_RECEIVED' || !payload) return;
+    const {sourceTopic, data} = payload;
+    if (
+      typeof sourceTopic !== 'string' ||
+      !sourceTopic.startsWith('com.hevolve.encounter.icebreaker.')
+    ) {
+      return;
+    }
+    _encounterIcebreakerListeners.forEach((cb) => {
+      try {
+        cb(data);
+      } catch (err) {
+        console.warn('encounter.icebreaker handler error:', err);
+      }
+    });
+  };
+  _worker.addEventListener('message', _encounterIcebreakerWorkerHandler);
+}
+
+/**
+ * Subscribe to BLE encounter icebreaker state-change events.
+ * Callback receives `{match_id, side: 'a'|'b', status: 'sent'|'declined',
+ * icebreaker_a, icebreaker_b}`.  Fires when EITHER party approves or
+ * declines a draft.  Use to update the UI state on the OTHER party's
+ * device (e.g., dismiss the draft modal once the other side has acted).
+ *
+ * @param {(event: object) => void} callback
+ * @returns {Function} unsubscribe
+ */
+export function subscribeEncounterIcebreaker(callback) {
+  _ensureEncounterIcebreakerWorker();
+  _encounterIcebreakerListeners.add(callback);
+  return () => _encounterIcebreakerListeners.delete(callback);
+}
+
 // Singleton
 const realtimeService = new RealtimeService();
 export default realtimeService;
