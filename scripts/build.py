@@ -574,9 +574,11 @@ def _install_hevolve_database(python_exe):
         os.path.join(os.path.expanduser('~'), 'PycharmProjects', 'Hevolve_Database'),
     ]
     for path in candidates:
-        if os.path.exists(os.path.join(path, 'setup.py')):
+        has_setup = (os.path.exists(os.path.join(path, 'setup.py'))
+                     or os.path.exists(os.path.join(path, 'pyproject.toml')))
+        if has_setup:
             if run_command(
-                [python_exe, '-m', 'pip', 'install', path],
+                [python_exe, '-m', 'pip', 'install', '--no-deps', path],
                 "Installing hevolve-database from local project...",
                 check=False,
             ):
