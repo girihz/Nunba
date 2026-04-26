@@ -556,6 +556,25 @@ def _find_local_hartos_backend():
     return None
 
 
+def _configure_github_auth():
+    """Inject HEVOLVE_REPO_TOKEN into git's HTTPS URL rewrite so that
+    `pip install package@git+https://github.com/hertz-ai/PrivateRepo.git`
+    succeeds on CI runners that have no interactive credential prompt.
+
+    Safe to call multiple times — git config --global is idempotent.
+    No-ops silently when the token is absent (local dev / fork builds).
+    """
+    token = os.environ.get('HEVOLVE_REPO_TOKEN') or os.environ.get('GITHUB_TOKEN', '')
+    if not token:
+        return
+    subprocess.run(
+        ['git', 'config', '--global',
+         f'url.https://{token}@github.com/.insteadOf',
+         'https://github.com/'],
+        check=False,
+    )
+
+
 def _install_hevolve_database(python_exe):
     """Install hevolve-database (single source of truth for all DB models) from local sibling.
 
@@ -574,9 +593,11 @@ def _install_hevolve_database(python_exe):
         os.path.join(os.path.expanduser('~'), 'PycharmProjects', 'Hevolve_Database'),
     ]
     for path in candidates:
-        if os.path.exists(os.path.join(path, 'setup.py')):
+        has_setup = (os.path.exists(os.path.join(path, 'setup.py'))
+                     or os.path.exists(os.path.join(path, 'pyproject.toml')))
+        if has_setup:
             if run_command(
-                [python_exe, '-m', 'pip', 'install', path],
+                [python_exe, '-m', 'pip', 'install', '--no-deps', path],
                 "Installing hevolve-database from local project...",
                 check=False,
             ):
@@ -650,6 +671,10 @@ def _install_hartos_backend(python_exe):
     says >=0.0.230 which pip resolves to 1.x (slim package without llms/chains/etc.),
     breaking `from langchain.llms import OpenAI` in hart_intelligence (hart_intelligence.py).
     """
+    # Ensure git can authenticate to private GitHub repos in case any fallback
+    # pip install hits a git+https:// URL (e.g. local _deps/ checkout missing).
+    _configure_github_auth()
+
     # Pre-install dependencies from local siblings so pip doesn't try git URLs
     _install_hevolve_database(python_exe)
     _install_embodied_ai(python_exe)

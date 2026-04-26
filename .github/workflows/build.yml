@@ -211,9 +211,9 @@ jobs:
             fi
           done
 
-          # Hevolve_Database: try pip install -e first, fall back to .pth
-          if [ -f "_deps/Hevolve_Database/setup.py" ]; then
-            echo "Installing Hevolve_Database from source (setup.py)..."
+          # Hevolve_Database: try pip install first (setup.py or pyproject.toml), fall back to .pth
+          if [ -f "_deps/Hevolve_Database/setup.py" ] || [ -f "_deps/Hevolve_Database/pyproject.toml" ]; then
+            echo "Installing Hevolve_Database from source..."
             pip install --no-deps -e "_deps/Hevolve_Database" 2>&1 | tail -3
           fi
           # Always create .pth as belt-and-suspenders (editable installs can silently break)
@@ -234,6 +234,7 @@ jobs:
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           NUNBA_CI: '1'
+          HEVOLVE_REPO_TOKEN: ${{ secrets.HEVOLVE_REPO_TOKEN }}
 
       - name: Sign Nunba.exe (Azure Trusted Signing)
         if: ${{ !inputs.skip_signing }}
@@ -384,8 +385,8 @@ jobs:
               pip install --no-deps -e "$dep_dir" 2>&1 | tail -2
             fi
           done
-          if [ -f "_deps/Hevolve_Database/setup.py" ]; then
-            echo "Installing Hevolve_Database from source (setup.py)..."
+          if [ -f "_deps/Hevolve_Database/setup.py" ] || [ -f "_deps/Hevolve_Database/pyproject.toml" ]; then
+            echo "Installing Hevolve_Database from source..."
             pip install --no-deps -e "_deps/Hevolve_Database" 2>&1 | tail -3
           fi
           if [ -d "_deps/Hevolve_Database/sql" ]; then
@@ -403,6 +404,7 @@ jobs:
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           NUNBA_CI: '1'
+          HEVOLVE_REPO_TOKEN: ${{ secrets.HEVOLVE_REPO_TOKEN }}
 
       - name: Import Apple signing certificate
         if: ${{ !inputs.skip_signing }}
@@ -546,9 +548,9 @@ jobs:
             fi
           done
 
-          # Hevolve_Database: try pip install -e first, fall back to .pth
-          if [ -f "_deps/Hevolve_Database/setup.py" ]; then
-            echo "Installing Hevolve_Database from source (setup.py)..."
+          # Hevolve_Database: try pip install first (setup.py or pyproject.toml), fall back to .pth
+          if [ -f "_deps/Hevolve_Database/setup.py" ] || [ -f "_deps/Hevolve_Database/pyproject.toml" ]; then
+            echo "Installing Hevolve_Database from source..."
             pip install --no-deps -e "_deps/Hevolve_Database" 2>&1 | tail -3
           fi
           # Always create .pth as belt-and-suspenders (editable installs can silently break)
@@ -569,6 +571,7 @@ jobs:
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           NUNBA_CI: '1'
+          HEVOLVE_REPO_TOKEN: ${{ secrets.HEVOLVE_REPO_TOKEN }}
 
       - name: E2E smoke test (start server, hit health endpoint)
         run: |
